@@ -4,13 +4,11 @@
   const PANEL_ID = 'mjpt-panel';
   const PROVIDER_LABELS = { free: '免费翻译', qwen: '千问', deepseek: 'DeepSeek' };
   const FALLBACK_PARAMS = { aspectRatio: '16:9', stylize: 450, chaos: 8, quality: '', hd: false };
-  const draftStore = MJDraftStore.createDraftStore(chrome.storage.local);
   let currentPanel = null;
   let currentComposer = null;
   let currentHost = null;
   let scanTimer = null;
   let saveTimer = null;
-  let draftSaveTimer = null;
 
   function positionCurrentPanel() {
     if (!currentPanel || !currentHost || currentPanel.hidden) return;
@@ -166,7 +164,7 @@
         <button class="mjpt-translate" data-mjpt="translate-fill" type="button">翻译并填入</button>
         <button class="mjpt-secondary" data-mjpt="translate-only" type="button">翻译</button>
         <button class="mjpt-secondary" data-mjpt="fill" type="button">填入</button>
-        <button class="mjpt-secondary" data-mjpt="save-draft" type="button">保存</button>
+        <button class="mjpt-secondary" data-mjpt="save-config" type="button">保存配置</button>
         <button class="mjpt-clear" data-mjpt="clear" type="button">清空</button>
         <button class="mjpt-settings" data-mjpt="settings" type="button">设置</button>
       </div>
@@ -176,11 +174,6 @@
   }
 
   async function loadUiSettings(panel) {
-    try {
-      panel.querySelector('[data-mjpt="prompt"]').value = await draftStore.load();
-    } catch {
-      setStatus(panel, '中文草稿读取失败，但不影响本次使用', 'error');
-    }
     try {
       const response = await chrome.runtime.sendMessage({ type: 'get-ui-settings' });
       if (!response?.ok) throw new Error(response?.message);
@@ -310,28 +303,24 @@
     panel.querySelector('[data-mjpt="fill"]').addEventListener('click', (event) => {
       translate(panel, 'fill', event.currentTarget);
     });
-    panel.querySelector('[data-mjpt="save-draft"]').addEventListener('click', async () => {
-      clearTimeout(draftSaveTimer);
+    panel.querySelector('[data-mjpt="save-config"]').addEventListener('click', async () => {
       clearTimeout(saveTimer);
       try {
-        await MJDraftStore.savePanelState(
-          draftStore,
+        await MJDraftStore.savePanelConfig(
           chrome.runtime,
-          input.value,
           provider.value,
           instruction.value,
           paramsFromPanel(panel),
         );
-        setStatus(panel, '提示词和参数已保存到本地', 'success');
+        setStatus(panel, '配置已保存到本地', 'success');
       } catch {
-        setStatus(panel, '提示词或参数保存失败，请重试', 'error');
+        setStatus(panel, '配置保存失败，请重试', 'error');
       }
       input.focus();
     });
     panel.querySelector('[data-mjpt="clear"]').addEventListener('click', () => {
-      clearTimeout(draftSaveTimer);
       MJDraftStore.clearPanelContent(input, preview);
-      setStatus(panel, '已临时清空，刷新后可恢复已保存内容', 'success');
+      setStatus(panel, '已清空当前输入', 'success');
       input.focus();
     });
     panel.querySelector('[data-mjpt="settings"]').addEventListener('click', async () => {
@@ -372,14 +361,6 @@
       if (preview.dataset.stale === 'true') {
         setStatus(panel, '中文内容已修改，右侧为上次翻译');
       }
-      clearTimeout(draftSaveTimer);
-      draftSaveTimer = setTimeout(async () => {
-        try {
-          await draftStore.save(input.value);
-        } catch {
-          setStatus(panel, '中文草稿未能保存，但本次仍可使用', 'error');
-        }
-      }, 250);
     });
     input.addEventListener('keydown', (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
