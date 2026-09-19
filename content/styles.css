@@ -76,8 +76,12 @@
 #mjpt-panel .mjpt-status[data-kind="success"] { color: #087443; }
 #mjpt-panel .mjpt-status[data-kind="error"] { color: #b42318; }
 
-.mjpt-page-translation { display: block; margin-top: 2px; color: #7c6cf2; font-size: .9em; line-height: 1.35; pointer-events: none !important; }
+.mjpt-page-translation { display: inline; margin-inline-start: .35em; color: #7c6cf2; font-size: .9em; line-height: 1.35; pointer-events: none !important; }
+.mjpt-page-translation::before { content: "（"; }
+.mjpt-page-translation::after { content: "）"; }
 .mjpt-page-translation--only { display: inline; margin: 0; color: inherit; pointer-events: none !important; }
+.mjpt-page-translation--only::before,
+.mjpt-page-translation--only::after { content: ""; }
 
 @media (max-width: 760px) {
   #mjpt-panel .mjpt-editor-grid { grid-template-columns: 1fr; }

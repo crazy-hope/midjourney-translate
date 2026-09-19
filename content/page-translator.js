@@ -5,6 +5,13 @@
     'INPUT', 'TEXTAREA', 'SCRIPT', 'STYLE', 'NOSCRIPT', 'CODE', 'PRE', 'SVG', 'OPTION',
   ]);
 
+  function normalizeSource(value) {
+    const shared = globalScope.MJPageTranslationCache?.normalizeSource;
+    return typeof shared === 'function'
+      ? shared(value)
+      : String(value || '').trim().replace(/\s+/g, ' ');
+  }
+
   function isTranslationCandidate(value) {
     const text = typeof value === 'string' ? value.trim() : '';
     if (!text || /^--/.test(text) || /https?:\/\/|www\./i.test(text)) return false;
@@ -44,152 +51,218 @@
     return true;
   }
 
+  function deferred() {
+    let resolve;
+    const promise = new Promise((done) => { resolve = done; });
+    return { promise, resolve };
+  }
+
   function createController(options = {}) {
     const {
       adapter,
+      cache,
       request,
       concurrency = 2,
+      maxPending = 200,
+      batchSize = 100,
+      yieldControl = () => new Promise((resolve) => {
+        if (typeof globalScope.requestAnimationFrame === 'function') {
+          globalScope.requestAnimationFrame(() => resolve());
+        } else setTimeout(resolve, 0);
+      }),
       onProgress = () => {},
       onError = () => {},
     } = options;
-    if (!adapter || typeof adapter.collect !== 'function'
+    if (!adapter || typeof adapter.discover !== 'function'
+      || typeof adapter.observe !== 'function' || typeof adapter.unobserve !== 'function'
       || typeof adapter.render !== 'function' || typeof adapter.restore !== 'function'
+      || !cache || typeof cache.get !== 'function' || typeof cache.put !== 'function'
       || typeof request !== 'function') {
-      throw new TypeError('Page translation adapter and request function are required');
+      throw new TypeError('Page translation adapter, cache, and request function are required');
     }
 
     const workerCount = Math.max(1, Math.floor(Number(concurrency) || 2));
+    const pendingLimit = Math.max(workerCount, Math.floor(Number(maxPending) || 200));
+    const discoveryBatchSize = Math.max(1, Math.floor(Number(batchSize) || 100));
     let enabled = false;
     let keepOriginal = true;
     let provider = 'deepseek';
     let generation = 0;
-    let errorGeneration = -1;
     let haltedGeneration = -1;
-    let activeRequests = 0;
-    const cache = new Map();
+    let errorGeneration = -1;
+    let completed = 0;
     const records = new Set();
-    const pendingByKey = new Map();
-    const permitWaiters = [];
+    const jobsByKey = new Map();
+    const queuedJobs = [];
+    const inflightJobs = new Set();
+    const overflowRecords = new Set();
 
-    function keyFor(providerName, text) {
-      return `${providerName}\u0000${text}`;
+    function reportProgress() {
+      onProgress({ completed, pending: jobsByKey.size });
     }
 
-    function acquirePermit() {
-      if (activeRequests < workerCount) {
-        activeRequests += 1;
-        return Promise.resolve();
+    function jobKey(providerName, text) {
+      return `${providerName}\u0000${normalizeSource(text)}`;
+    }
+
+    function finishJob(job) {
+      if (jobsByKey.get(job.key) === job) jobsByKey.delete(job.key);
+      job.done.resolve();
+      reportProgress();
+    }
+
+    function cancelWaitingJobs() {
+      for (const job of queuedJobs.splice(0)) finishJob(job);
+      for (const job of jobsByKey.values()) {
+        if (!inflightJobs.has(job)) finishJob(job);
       }
-      return new Promise((resolve) => permitWaiters.push(resolve));
-    }
-
-    function releasePermit() {
-      const next = permitWaiters.shift();
-      if (next) next();
-      else activeRequests -= 1;
-    }
-
-    async function requestWithPermit(payload, scanGeneration) {
-      await acquirePermit();
-      try {
-        if (!enabled || scanGeneration !== generation || haltedGeneration === generation) {
-          return { cancelled: true };
-        }
-        return { response: await request(payload) };
-      } finally {
-        releasePermit();
-      }
+      overflowRecords.clear();
     }
 
     function restoreAll() {
-      for (const item of records) adapter.restore(item);
+      for (const item of records) {
+        adapter.unobserve(item);
+        adapter.restore(item);
+      }
       records.clear();
     }
 
-    async function scan(root) {
-      if (!enabled) return;
-      const scanGeneration = generation;
-      const scanProvider = provider;
-      const groups = new Map();
-      for (const item of adapter.collect(root) || []) {
-        if (!isTranslationCandidate(item.text)) continue;
-        records.add(item);
-        const key = keyFor(scanProvider, item.text);
-        if (!groups.has(key)) groups.set(key, { key, text: item.text, records: [] });
-        groups.get(key).records.push(item);
+    function reconsiderOverflow() {
+      if (!enabled || haltedGeneration === generation) return;
+      for (const item of [...overflowRecords]) {
+        if (jobsByKey.size >= pendingLimit) break;
+        overflowRecords.delete(item);
+        enqueueVisible(item);
       }
+    }
 
-      let completed = 0;
-      const jobs = [...groups.values()];
-      onProgress({ completed, pending: jobs.length });
-      let cursor = 0;
-
-      async function runJob(job) {
-        if (!enabled || scanGeneration !== generation || haltedGeneration === generation) return;
-        let chinese = cache.get(job.key);
-        if (!chinese) {
-          let pending = pendingByKey.get(job.key);
-          if (!pending) {
-            pending = requestWithPermit({
-              text: job.text,
-              provider: scanProvider,
-              purpose: 'page',
-            }, scanGeneration);
-            pendingByKey.set(job.key, pending);
+    async function runJob(job) {
+      inflightJobs.add(job);
+      try {
+        const response = await request({
+          text: job.text,
+          provider: job.provider,
+          purpose: 'page',
+        });
+        const chinese = response?.text;
+        if (typeof chinese !== 'string' || !chinese.trim()) {
+          throw new Error('页面翻译返回了空结果');
+        }
+        cache.put(job.provider, job.text, chinese);
+        if (enabled && job.generation === generation && haltedGeneration !== generation) {
+          for (const item of job.records) {
+            adapter.render(item, chinese, keepOriginal);
+            adapter.unobserve(item);
           }
-          try {
-            const outcome = await pending;
-            if (outcome?.cancelled) return;
-            const response = outcome?.response;
-            chinese = response?.text;
-            if (typeof chinese !== 'string' || !chinese.trim()) {
-              throw new Error('页面翻译返回了空结果');
-            }
-            cache.set(job.key, chinese);
-          } catch (error) {
-            if (enabled && scanGeneration === generation) haltedGeneration = generation;
-            if (enabled && scanGeneration === generation && errorGeneration !== generation) {
-              errorGeneration = generation;
-              onError(error);
-            }
-            return;
-          } finally {
-            if (pendingByKey.get(job.key) === pending) pendingByKey.delete(job.key);
+          completed += 1;
+        }
+      } catch (error) {
+        if (enabled && job.generation === generation) {
+          haltedGeneration = generation;
+          cancelWaitingJobs();
+          if (errorGeneration !== generation) {
+            errorGeneration = generation;
+            onError(error);
           }
         }
-        if (!enabled || scanGeneration !== generation) return;
-        for (const item of job.records) adapter.render(item, chinese, keepOriginal);
+      } finally {
+        inflightJobs.delete(job);
+        finishJob(job);
+        if (enabled && haltedGeneration !== generation) {
+          reconsiderOverflow();
+          pump();
+        }
+      }
+    }
+
+    function pump() {
+      if (!enabled || haltedGeneration === generation) return;
+      while (inflightJobs.size < workerCount && queuedJobs.length) {
+        const job = queuedJobs.shift();
+        if (job.generation !== generation || jobsByKey.get(job.key) !== job) {
+          finishJob(job);
+        } else {
+          runJob(job);
+        }
+      }
+    }
+
+    function enqueueVisible(item) {
+      if (!enabled || haltedGeneration === generation || !records.has(item)) {
+        return Promise.resolve();
+      }
+      const currentProvider = provider;
+      const normalized = normalizeSource(item.text);
+      const cached = cache.get(currentProvider, normalized);
+      if (cached) {
+        adapter.render(item, cached, keepOriginal);
+        adapter.unobserve(item);
         completed += 1;
-        onProgress({ completed, pending: Math.max(0, jobs.length - completed) });
+        reportProgress();
+        return Promise.resolve();
       }
-
-      async function worker() {
-        while (cursor < jobs.length && haltedGeneration !== scanGeneration) {
-          const job = jobs[cursor];
-          cursor += 1;
-          await runJob(job);
-        }
+      const key = jobKey(currentProvider, normalized);
+      const existing = jobsByKey.get(key);
+      if (existing) {
+        existing.records.add(item);
+        return existing.done.promise;
       }
+      if (jobsByKey.size >= pendingLimit) {
+        overflowRecords.add(item);
+        reportProgress();
+        return Promise.resolve();
+      }
+      const job = {
+        key,
+        text: normalized,
+        provider: currentProvider,
+        generation,
+        records: new Set([item]),
+        done: deferred(),
+      };
+      jobsByKey.set(key, job);
+      queuedJobs.push(job);
+      reportProgress();
+      pump();
+      return job.done.promise;
+    }
 
-      await Promise.all(
-        Array.from({ length: Math.min(workerCount, jobs.length) }, () => worker()),
-      );
+    async function register(root) {
+      if (!enabled || !root) return;
+      const registerGeneration = generation;
+      await adapter.discover(root, {
+        batchSize: discoveryBatchSize,
+        yieldControl,
+        onRecord(item) {
+          if (!enabled || registerGeneration !== generation
+            || !item || !isTranslationCandidate(item.text) || records.has(item)) return;
+          records.add(item);
+          adapter.observe(item, enqueueVisible);
+        },
+      });
     }
 
     function enable(next = {}) {
+      if (enabled) {
+        cancelWaitingJobs();
+        restoreAll();
+      }
       generation += 1;
       enabled = true;
       provider = next.provider || provider;
       keepOriginal = next.keepOriginal !== false;
-      errorGeneration = -1;
       haltedGeneration = -1;
+      errorGeneration = -1;
+      completed = 0;
+      reportProgress();
     }
 
     function disable() {
       generation += 1;
       enabled = false;
-      pendingByKey.clear();
+      cancelWaitingJobs();
       restoreAll();
+      reportProgress();
     }
 
     function setKeepOriginal(value) {
@@ -200,20 +273,40 @@
     function setProvider(value) {
       if (!value || value === provider) return;
       generation += 1;
-      provider = value;
-      pendingByKey.clear();
+      cancelWaitingJobs();
       restoreAll();
-      errorGeneration = -1;
+      provider = value;
       haltedGeneration = -1;
+      errorGeneration = -1;
+      completed = 0;
+      reportProgress();
     }
 
     function snapshot() {
       return Object.freeze({
-        enabled, keepOriginal, provider, recordCount: records.size, generation,
+        enabled,
+        keepOriginal,
+        provider,
+        recordCount: records.size,
+        pending: jobsByKey.size,
+        active: inflightJobs.size,
+        generation,
       });
     }
 
-    return Object.freeze({ enable, disable, setKeepOriginal, setProvider, scan, snapshot });
+    function flushCache() {
+      return typeof cache.flush === 'function' ? cache.flush() : Promise.resolve();
+    }
+
+    return Object.freeze({
+      enable,
+      disable,
+      register,
+      setKeepOriginal,
+      setProvider,
+      snapshot,
+      flushCache,
+    });
   }
 
   function createBrowserAdapter(documentObject, panelId = 'mjpt-panel') {
@@ -221,64 +314,123 @@
       throw new TypeError('Document is required');
     }
     const ownedByNode = new WeakMap();
-    const nodeFilter = documentObject.defaultView?.NodeFilter || globalScope.NodeFilter;
+    const observedByElement = new Map();
+    const fallbackRecords = new Map();
+    const view = documentObject.defaultView || globalScope;
+    const nodeFilter = view.NodeFilter || globalScope.NodeFilter;
+    const getStyle = view.getComputedStyle?.bind(view);
 
     function visible(element) {
-      return isVisibleElement(element, documentObject.defaultView?.getComputedStyle?.bind(
-        documentObject.defaultView,
-      ));
+      return isVisibleElement(element, getStyle);
     }
 
     function recordFor(node) {
       const existing = ownedByNode.get(node);
       if (existing) return existing;
       const originalText = node.nodeValue || '';
-      const item = {
-        node,
-        originalText,
-        text: originalText.trim(),
-        translationNode: null,
-      };
+      const item = { node, originalText, text: originalText.trim(), translationNode: null };
       ownedByNode.set(node, item);
       return item;
     }
 
-    function collect(root) {
-      const collected = [];
-      if (!root) return collected;
-      if (root.nodeType === 3) {
-        if (!shouldSkipElement(root.parentElement, panelId)
-          && visible(root.parentElement) && isTranslationCandidate(root.nodeValue)) {
-          collected.push(recordFor(root));
-        }
-        return collected;
+    function acceptNode(node, onRecord) {
+      if (isTranslationCandidate(node.nodeValue)
+        && !shouldSkipElement(node.parentElement, panelId) && visible(node.parentElement)) {
+        onRecord(recordFor(node));
       }
-      const showText = nodeFilter?.SHOW_TEXT || 4;
-      const walker = documentObject.createTreeWalker(root, showText);
-      let node = walker.nextNode();
-      while (node) {
-        if (!shouldSkipElement(node.parentElement, panelId)
-          && visible(node.parentElement) && isTranslationCandidate(node.nodeValue)) {
-          collected.push(recordFor(node));
-        }
-        node = walker.nextNode();
-      }
-      return collected;
     }
 
-    function applyMode(item, keepOriginal) {
+    async function discover(root, options = {}) {
+      if (!root) return;
+      const batchSize = Math.max(1, Number(options.batchSize) || 100);
+      const yieldControl = options.yieldControl || (() => Promise.resolve());
+      const onRecord = options.onRecord || (() => {});
+      if (root.nodeType === 3) {
+        acceptNode(root, onRecord);
+        return;
+      }
+      const walker = documentObject.createTreeWalker(root, nodeFilter?.SHOW_TEXT || 4);
+      let visited = 0;
+      let node = walker.nextNode();
+      while (node) {
+        visited += 1;
+        acceptNode(node, onRecord);
+        if (visited % batchSize === 0) await yieldControl();
+        node = walker.nextNode();
+      }
+    }
+
+    let observer = null;
+    if (typeof view.IntersectionObserver === 'function') {
+      observer = new view.IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          for (const { item, callback } of observedByElement.get(entry.target) || []) callback(item);
+        }
+      }, { root: null, rootMargin: '300px 0px', threshold: 0 });
+    }
+
+    function isNearViewport(item) {
+      const rect = item.node?.parentElement?.getBoundingClientRect?.();
+      const height = Number(view.innerHeight) || 0;
+      return Boolean(rect && rect.bottom >= -300 && rect.top <= height + 300);
+    }
+
+    function checkFallback() {
+      for (const [item, callback] of fallbackRecords) {
+        if (isNearViewport(item)) callback(item);
+      }
+    }
+
+    if (!observer) {
+      view.addEventListener?.('scroll', checkFallback, { passive: true });
+      view.addEventListener?.('resize', checkFallback);
+    }
+
+    function observe(item, callback) {
+      const element = item.node?.parentElement;
+      if (!element) return;
+      if (!observer) {
+        fallbackRecords.set(item, callback);
+        checkFallback();
+        return;
+      }
+      let entries = observedByElement.get(element);
+      if (!entries) {
+        entries = new Set();
+        observedByElement.set(element, entries);
+        observer.observe(element);
+      }
+      entries.add({ item, callback });
+    }
+
+    function unobserve(item) {
+      fallbackRecords.delete(item);
+      const element = item.node?.parentElement;
+      const entries = observedByElement.get(element);
+      if (!entries) return;
+      for (const entry of entries) {
+        if (entry.item === item) entries.delete(entry);
+      }
+      if (!entries.size) {
+        observedByElement.delete(element);
+        observer?.unobserve(element);
+      }
+    }
+
+    function applyMode(item, retainOriginal) {
       if (!item.translationNode) return;
-      item.translationNode.className = keepOriginal
+      item.translationNode.className = retainOriginal
         ? 'mjpt-page-translation'
         : 'mjpt-page-translation mjpt-page-translation--only';
-      if (keepOriginal) {
+      if (retainOriginal) {
         if (item.node.nodeValue === '') item.node.nodeValue = item.originalText;
       } else if (item.node.nodeValue === item.originalText) {
         item.node.nodeValue = '';
       }
     }
 
-    function render(item, chinese, keepOriginal) {
+    function render(item, chinese, retainOriginal) {
       if (!item.node?.isConnected) return;
       if (!item.translationNode?.isConnected) {
         const span = documentObject.createElement('span');
@@ -288,10 +440,8 @@
         span.style.pointerEvents = 'none';
         item.node.parentNode?.insertBefore(span, item.node.nextSibling);
         item.translationNode = span;
-      } else {
-        item.translationNode.textContent = chinese;
-      }
-      applyMode(item, keepOriginal);
+      } else item.translationNode.textContent = chinese;
+      applyMode(item, retainOriginal);
     }
 
     function setKeepOriginal(item, value) {
@@ -299,12 +449,13 @@
     }
 
     function restore(item) {
+      unobserve(item);
       const restored = restoreOwnedRecord(item);
       if (restored) ownedByNode.delete(item.node);
       return restored;
     }
 
-    return Object.freeze({ collect, render, setKeepOriginal, restore });
+    return Object.freeze({ discover, observe, unobserve, render, setKeepOriginal, restore });
   }
 
   const api = Object.freeze({

@@ -1,22 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-let isTranslationCandidate;
-let shouldSkipElement;
-let isVisibleElement;
-let restoreOwnedRecord;
-let createController;
-try {
-  ({
-    isTranslationCandidate,
-    shouldSkipElement,
-    isVisibleElement,
-    restoreOwnedRecord,
-    createController,
-  } = require('../content/page-translator.js'));
-} catch {
-  isTranslationCandidate = undefined;
-}
+const {
+  isTranslationCandidate,
+  shouldSkipElement,
+  isVisibleElement,
+  restoreOwnedRecord,
+  createController,
+} = require('../content/page-translator.js');
 
 for (const [text, expected] of [
   ['Create', true],
@@ -29,215 +20,233 @@ for (const [text, expected] of [
   ['A', false],
 ]) {
   test(`page candidate ${JSON.stringify(text)} => ${expected}`, () => {
-    assert.equal(typeof isTranslationCandidate, 'function');
     assert.equal(isTranslationCandidate(text), expected);
   });
 }
 
-test('skips protected elements and descendants of editable or translator content', () => {
-  assert.equal(typeof shouldSkipElement, 'function');
+test('skips protected, editable, extension-owned, and hidden content', () => {
   const element = (tagName, parentElement = null, extra = {}) => ({ tagName, parentElement, ...extra });
   const panel = element('SECTION', null, { id: 'mjpt-panel' });
   const editable = element('DIV', null, { getAttribute: (name) => (name === 'contenteditable' ? 'true' : null) });
-  const fixtures = [
-    element('SPAN', panel),
-    element('INPUT'),
-    element('TEXTAREA'),
-    element('SCRIPT'),
-    element('STYLE'),
-    element('CODE'),
-    element('SPAN', editable),
-  ];
-  assert.ok(fixtures.every((item) => shouldSkipElement(item)));
-  assert.equal(shouldSkipElement(element('SPAN')), false);
-});
-
-test('treats descendants of hidden containers as invisible', () => {
-  assert.equal(typeof isVisibleElement, 'function');
-  assert.equal(isVisibleElement(null), false);
-  const hiddenParent = {
-    hidden: false,
-    parentElement: null,
-    getAttribute: () => null,
-  };
-  const child = {
-    hidden: false,
-    parentElement: hiddenParent,
-    getAttribute: () => null,
-  };
-  const getStyle = (element) => ({
-    display: element === hiddenParent ? 'none' : 'block',
-    visibility: 'visible',
-  });
-  assert.equal(isVisibleElement(child, getStyle), false);
+  assert.ok([
+    element('SPAN', panel), element('INPUT'), element('TEXTAREA'), element('SCRIPT'),
+    element('STYLE'), element('CODE'), element('SPAN', editable),
+  ].every((item) => shouldSkipElement(item)));
+  const hidden = { hidden: true, parentElement: null, getAttribute: () => null };
+  const child = { hidden: false, parentElement: hidden, getAttribute: () => null };
+  assert.equal(isVisibleElement(child, () => ({ display: 'block', visibility: 'visible' })), false);
 });
 
 function record(id, text) {
   return { id, text, connected: true };
 }
 
-function adapterFor(records) {
-  const events = [];
+function emptyCache(seed = []) {
+  const values = new Map(seed.map(({ provider, source, translated }) => [`${provider}\0${source}`, translated]));
   return {
-    events,
-    collect() { return records; },
-    render(item, chinese, keepOriginal) {
-      events.push({ type: 'render', id: item.id, chinese, keepOriginal });
+    puts: [],
+    get(provider, source) { return values.get(`${provider}\0${source.trim().replace(/\s+/g, ' ')}`); },
+    put(provider, source, translated) {
+      const normalized = source.trim().replace(/\s+/g, ' ');
+      values.set(`${provider}\0${normalized}`, translated);
+      this.puts.push({ provider, source: normalized, translated });
     },
-    setKeepOriginal(item, keepOriginal) {
-      events.push({ type: 'mode', id: item.id, keepOriginal });
-    },
-    restore(item) { events.push({ type: 'restore', id: item.id }); },
+    async flush() {},
   };
 }
 
-test('deduplicates equal text and renders both records from one request', async () => {
-  assert.equal(typeof createController, 'function');
-  const adapter = adapterFor([record(1, 'Create'), record(2, 'Create')]);
-  let requests = 0;
-  const controller = createController({
-    adapter,
-    request: async () => { requests += 1; return { text: '创建', provider: 'free' }; },
-  });
-  controller.enable({ provider: 'free', keepOriginal: true });
-  await controller.scan({});
-  assert.equal(requests, 1);
-  assert.deepEqual(
-    adapter.events.filter((event) => event.type === 'render').map((event) => event.id),
-    [1, 2],
-  );
+function visibilityAdapter(source) {
+  const callbacks = new Map();
+  const events = [];
+  const recordsFor = (root) => (Array.isArray(source) ? source : source[root] || []);
+  return {
+    events,
+    async discover(root, { batchSize, yieldControl, onRecord }) {
+      let visited = 0;
+      for (const item of recordsFor(root)) {
+        visited += 1;
+        onRecord(item);
+        if (visited % batchSize === 0) await yieldControl();
+      }
+    },
+    observe(item, onVisible) { callbacks.set(item.id, { item, onVisible }); },
+    unobserve(item) { callbacks.delete(item.id); },
+    render(item, chinese, keepOriginal) { events.push({ type: 'render', id: item.id, chinese, keepOriginal }); },
+    setKeepOriginal(item, keepOriginal) { events.push({ type: 'mode', id: item.id, keepOriginal }); },
+    restore(item) { events.push({ type: 'restore', id: item.id }); },
+    show(id) {
+      const entry = callbacks.get(id);
+      return entry ? entry.onVisible(entry.item) : Promise.resolve();
+    },
+    showAllWithoutWaiting() {
+      for (const { item, onVisible } of [...callbacks.values()]) onVisible(item);
+    },
+    observedCount() { return callbacks.size; },
+    renderedIds() { return events.filter((event) => event.type === 'render').map((event) => event.id); },
+  };
+}
+
+function countedRequest(result = (payload) => ({ text: `中:${payload.text}`, provider: payload.provider })) {
+  const request = async (payload) => {
+    request.calls.push(payload);
+    return result(payload);
+  };
+  request.calls = [];
+  return request;
+}
+
+function deferredRequest() {
+  let resolve;
+  const promise = new Promise((done) => { resolve = done; });
+  const request = countedRequest(() => promise);
+  return { request, calls: request.calls, resolve };
+}
+
+test('offscreen records do not request until their visibility callback fires', async () => {
+  const adapter = visibilityAdapter([record(1, 'Create')]);
+  const request = countedRequest();
+  const controller = createController({ adapter, cache: emptyCache(), request });
+  controller.enable({ provider: 'deepseek', keepOriginal: true });
+  await controller.register({});
+  assert.equal(request.calls.length, 0);
+  await adapter.show(1);
+  assert.equal(request.calls.length, 1);
 });
 
-test('cache separates providers', async () => {
-  const adapter = adapterFor([record(1, 'Create')]);
-  const providers = [];
+test('equal text across mutation registrations shares one in-flight request', async () => {
+  const adapter = visibilityAdapter({
+    one: [record(1, 'Create image')], two: [record(2, ' Create   image ')],
+  });
+  const pending = deferredRequest();
+  const controller = createController({ adapter, cache: emptyCache(), request: pending.request });
+  controller.enable({ provider: 'deepseek', keepOriginal: true });
+  await Promise.all([controller.register('one'), controller.register('two')]);
+  const rendering = Promise.all([adapter.show(1), adapter.show(2)]);
+  assert.equal(pending.calls.length, 1);
+  pending.resolve({ text: '创建图像', provider: 'deepseek' });
+  await rendering;
+  assert.deepEqual(adapter.renderedIds(), [1, 2]);
+});
+
+test('queue never owns more than two hundred service keys', async () => {
+  const records = Array.from({ length: 250 }, (_, index) => record(index, `Create ${index}`));
+  const adapter = visibilityAdapter(records);
+  const controller = createController({
+    adapter, cache: emptyCache(), request: () => new Promise(() => {}), maxPending: 200,
+  });
+  controller.enable({ provider: 'deepseek', keepOriginal: true });
+  await controller.register({});
+  adapter.showAllWithoutWaiting();
+  assert.equal(controller.snapshot().pending, 200);
+  assert.equal(adapter.observedCount(), 250);
+});
+
+test('discovery yields after each one hundred visited records', async () => {
+  const adapter = visibilityAdapter(Array.from({ length: 250 }, (_, index) => record(index, `Create ${index}`)));
+  let yields = 0;
   const controller = createController({
     adapter,
-    request: async ({ provider }) => {
-      providers.push(provider);
-      return { text: provider, provider };
+    cache: emptyCache(),
+    request: countedRequest(),
+    yieldControl: async () => { yields += 1; },
+  });
+  controller.enable({ provider: 'free', keepOriginal: true });
+  await controller.register({});
+  assert.equal(yields, 2);
+});
+
+test('cache hits avoid requests and provider changes use separate entries', async () => {
+  const cache = emptyCache([{ provider: 'deepseek', source: 'Create', translated: '创建' }]);
+  const request = countedRequest();
+  const adapter = visibilityAdapter([record(1, 'Create')]);
+  const controller = createController({ adapter, cache, request });
+  controller.enable({ provider: 'deepseek', keepOriginal: true });
+  await controller.register({});
+  await adapter.show(1);
+  assert.equal(request.calls.length, 0);
+  controller.setProvider('qwen');
+  await controller.register({});
+  await adapter.show(1);
+  assert.equal(request.calls.length, 1);
+});
+
+test('global request concurrency never exceeds two', async () => {
+  const adapter = visibilityAdapter([record(1, 'Create'), record(2, 'Explore'), record(3, 'Imagine')]);
+  let active = 0;
+  let maxActive = 0;
+  const controller = createController({
+    adapter,
+    cache: emptyCache(),
+    concurrency: 2,
+    request: async ({ text, provider }) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setImmediate(resolve));
+      active -= 1;
+      return { text: `中:${text}`, provider };
     },
   });
   controller.enable({ provider: 'free', keepOriginal: true });
-  await controller.scan({});
-  controller.setProvider('deepseek');
-  await controller.scan({});
-  assert.deepEqual(providers, ['free', 'deepseek']);
+  await controller.register({});
+  await Promise.all([adapter.show(1), adapter.show(2), adapter.show(3)]);
+  assert.equal(maxActive, 2);
 });
 
-test('keep-original mode changes without retranslating', async () => {
-  const adapter = adapterFor([record(1, 'Create')]);
+test('first request failure halts later queued jobs', async () => {
+  const adapter = visibilityAdapter([record(1, 'Create'), record(2, 'Explore'), record(3, 'Imagine')]);
   let requests = 0;
+  const errors = [];
   const controller = createController({
     adapter,
-    request: async () => { requests += 1; return { text: '创建', provider: 'free' }; },
+    cache: emptyCache(),
+    concurrency: 1,
+    request: async () => { requests += 1; throw new Error('provider unavailable'); },
+    onError: (error) => errors.push(error.message),
   });
   controller.enable({ provider: 'free', keepOriginal: true });
-  await controller.scan({});
-  controller.setKeepOriginal(false);
+  await controller.register({});
+  await Promise.all([adapter.show(1), adapter.show(2), adapter.show(3)]);
   assert.equal(requests, 1);
-  assert.deepEqual(adapter.events.at(-1), {
-    type: 'mode', id: 1, keepOriginal: false,
-  });
+  assert.deepEqual(errors, ['provider unavailable']);
 });
 
 test('disable restores records and ignores a delayed response', async () => {
-  const adapter = adapterFor([record(1, 'Create')]);
-  let resolveRequest;
-  const controller = createController({
-    adapter,
-    request: () => new Promise((resolve) => { resolveRequest = resolve; }),
-  });
+  const adapter = visibilityAdapter([record(1, 'Create')]);
+  const pending = deferredRequest();
+  const controller = createController({ adapter, cache: emptyCache(), request: pending.request });
   controller.enable({ provider: 'free', keepOriginal: true });
-  const scanning = controller.scan({});
-  await Promise.resolve();
+  await controller.register({});
+  const showing = adapter.show(1);
   controller.disable();
-  resolveRequest({ text: '创建', provider: 'free' });
-  await scanning;
-  assert.equal(adapter.events.some((event) => event.type === 'render'), false);
-  assert.equal(adapter.events.some((event) => event.type === 'restore'), true);
+  pending.resolve({ text: '创建', provider: 'free' });
+  await showing;
+  assert.equal(adapter.renderedIds().length, 0);
+  assert.ok(adapter.events.some((event) => event.type === 'restore'));
+});
+
+test('keep-original mode changes rendered records without retranslating', async () => {
+  const adapter = visibilityAdapter([record(1, 'Create')]);
+  const request = countedRequest();
+  const controller = createController({ adapter, cache: emptyCache(), request });
+  controller.enable({ provider: 'free', keepOriginal: true });
+  await controller.register({});
+  await adapter.show(1);
+  controller.setKeepOriginal(false);
+  assert.equal(request.calls.length, 1);
+  assert.deepEqual(adapter.events.at(-1), { type: 'mode', id: 1, keepOriginal: false });
 });
 
 test('restore skips disconnected and externally changed source nodes', () => {
-  assert.equal(typeof restoreOwnedRecord, 'function');
   const removed = [];
   const disconnected = {
-    node: { isConnected: false, nodeValue: '' },
-    originalText: 'Create',
+    node: { isConnected: false, nodeValue: '' }, originalText: 'Create',
     translationNode: { remove() { removed.push('disconnected'); } },
   };
   const changed = {
-    node: { isConnected: true, nodeValue: 'Changed by Midjourney' },
-    originalText: 'Create',
+    node: { isConnected: true, nodeValue: 'Changed by Midjourney' }, originalText: 'Create',
     translationNode: { remove() { removed.push('changed'); } },
   };
   assert.equal(restoreOwnedRecord(disconnected), false);
   assert.equal(restoreOwnedRecord(changed), false);
   assert.deepEqual(removed, []);
-});
-
-test('queue never exceeds two concurrent requests', async () => {
-  const adapter = adapterFor([
-    record(1, 'Create'), record(2, 'Explore'), record(3, 'Imagine'),
-  ]);
-  let active = 0;
-  let maxActive = 0;
-  const controller = createController({
-    adapter,
-    concurrency: 2,
-    request: async ({ text, provider }) => {
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      await new Promise((resolve) => setImmediate(resolve));
-      active -= 1;
-      return { text: `中:${text}`, provider };
-    },
-  });
-  controller.enable({ provider: 'free', keepOriginal: true });
-  await controller.scan({});
-  assert.equal(maxActive, 2);
-});
-
-test('concurrent scans share one global concurrency limit', async () => {
-  const roots = [
-    { records: [record(1, 'Create')] },
-    { records: [record(2, 'Explore')] },
-    { records: [record(3, 'Imagine')] },
-  ];
-  const adapter = adapterFor([]);
-  adapter.collect = (root) => root.records;
-  let active = 0;
-  let maxActive = 0;
-  const controller = createController({
-    adapter,
-    concurrency: 2,
-    request: async ({ text, provider }) => {
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      await new Promise((resolve) => setImmediate(resolve));
-      active -= 1;
-      return { text: `中:${text}`, provider };
-    },
-  });
-  controller.enable({ provider: 'free', keepOriginal: true });
-  await Promise.all(roots.map((root) => controller.scan(root)));
-  assert.equal(maxActive, 2);
-});
-
-test('first request failure stops later queued jobs in the same generation', async () => {
-  const adapter = adapterFor([
-    record(1, 'Create'), record(2, 'Explore'), record(3, 'Imagine'),
-  ]);
-  let requests = 0;
-  const controller = createController({
-    adapter,
-    concurrency: 1,
-    request: async () => {
-      requests += 1;
-      throw new Error('provider unavailable');
-    },
-  });
-  controller.enable({ provider: 'free', keepOriginal: true });
-  await controller.scan({});
-  assert.equal(requests, 1);
 });
