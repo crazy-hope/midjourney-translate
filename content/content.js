@@ -4,11 +4,16 @@
   const PANEL_ID = 'mjpt-panel';
   const PROVIDER_LABELS = { free: '免费翻译', qwen: '千问', deepseek: 'DeepSeek' };
   const FALLBACK_PARAMS = { aspectRatio: '16:9', stylize: 450, chaos: 8, quality: '', hd: false };
+  const promptLibrary = MJPromptLibrary.createPromptLibrary(chrome.storage.local);
+  const pageTranslationCache = MJPageTranslationCache.createPageTranslationCache(chrome.storage.local);
+  const pageCacheReady = pageTranslationCache.load();
   let currentPanel = null;
   let currentComposer = null;
   let currentHost = null;
   let scanTimer = null;
   let saveTimer = null;
+  let pageRootTimer = null;
+  const pageRoots = new Set();
 
   function positionCurrentPanel() {
     if (!currentPanel || !currentHost || currentPanel.hidden) return;
@@ -43,6 +48,7 @@
 
   const pageTranslator = MJPageTranslator.createController({
     adapter: MJPageTranslator.createBrowserAdapter(document, PANEL_ID),
+    cache: pageTranslationCache,
     request: async ({ text, provider }) => {
       const response = await chrome.runtime.sendMessage({
         type: 'translate', text, provider, purpose: 'page',
@@ -112,20 +118,35 @@
           <span class="mjpt-kicker">MJ TRANSLATOR</span>
           <strong>中文提示词</strong>
         </div>
-        <label class="mjpt-provider-wrap">
-          <span class="mjpt-sr-only">翻译类型</span>
-          <select class="mjpt-provider" data-mjpt="provider" aria-label="翻译类型">
-            <option value="deepseek">DeepSeek</option>
-            <option value="qwen">千问</option>
-            <option value="free">免费翻译</option>
-          </select>
-        </label>
+        <div class="mjpt-heading-actions">
+          <button class="mjpt-compact" data-mjpt="import" type="button">导入</button>
+          <button class="mjpt-compact" data-mjpt="export" type="button">导出</button>
+          <input data-mjpt="import-file" type="file" accept=".md,.txt,text/markdown,text/plain" hidden>
+          <label class="mjpt-provider-wrap">
+            <span class="mjpt-sr-only">翻译类型</span>
+            <select class="mjpt-provider" data-mjpt="provider" aria-label="翻译类型">
+              <option value="deepseek">DeepSeek</option>
+              <option value="qwen">千问</option>
+              <option value="free">免费翻译</option>
+            </select>
+          </label>
+        </div>
       </div>
       <div class="mjpt-editor-grid">
-        <label class="mjpt-editor">
-          <span>中文输入</span>
-          <textarea class="mjpt-prompt" data-mjpt="prompt" rows="7" placeholder="输入中文画面描述，可附带 --参数"></textarea>
-        </label>
+        <div class="mjpt-editor">
+          <div class="mjpt-editor-heading">
+            <label for="mjpt-prompt-input">中文输入</label>
+            <div class="mjpt-library-actions">
+              <div class="mjpt-library-picker">
+                <input data-mjpt="library-search" type="search" placeholder="检索已保存提示词" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="mjpt-library-results">
+                <div id="mjpt-library-results" class="mjpt-library-results" data-mjpt="library-results" role="listbox" hidden></div>
+              </div>
+              <button class="mjpt-compact" data-mjpt="prompt-add" type="button">新增</button>
+              <button class="mjpt-compact" data-mjpt="prompt-update" type="button">更新</button>
+            </div>
+          </div>
+          <textarea id="mjpt-prompt-input" class="mjpt-prompt" data-mjpt="prompt" rows="7" placeholder="输入中文画面描述，可附带 --参数"></textarea>
+        </div>
         <label class="mjpt-editor">
           <span>中英文对照</span>
           <textarea class="mjpt-preview" data-mjpt="preview" rows="7" placeholder="翻译完成后将在这里显示中英文对照" readonly></textarea>
@@ -169,6 +190,26 @@
         <button class="mjpt-settings" data-mjpt="settings" type="button">设置</button>
       </div>
       <p class="mjpt-status" data-mjpt="status" role="status" aria-live="polite"></p>
+      <div class="mjpt-modal" data-mjpt="title-dialog" hidden>
+        <div class="mjpt-dialog" role="dialog" aria-modal="true" aria-labelledby="mjpt-title-dialog-label">
+          <strong id="mjpt-title-dialog-label">新增提示词</strong>
+          <input data-mjpt="prompt-title" type="text" maxlength="120" placeholder="输入提示词标题">
+          <div class="mjpt-dialog-actions">
+            <button class="mjpt-secondary" data-mjpt="title-cancel" type="button">取消</button>
+            <button class="mjpt-translate" data-mjpt="title-confirm" type="button">确认新增</button>
+          </div>
+        </div>
+      </div>
+      <div class="mjpt-modal" data-mjpt="export-dialog" hidden>
+        <div class="mjpt-dialog" role="dialog" aria-modal="true" aria-labelledby="mjpt-export-dialog-label">
+          <strong id="mjpt-export-dialog-label">选择导出格式</strong>
+          <div class="mjpt-dialog-actions">
+            <button class="mjpt-secondary" data-mjpt="export-md" type="button">Markdown</button>
+            <button class="mjpt-secondary" data-mjpt="export-txt" type="button">TXT</button>
+            <button class="mjpt-clear" data-mjpt="export-cancel" type="button">取消</button>
+          </div>
+        </div>
+      </div>
     `;
     return panel;
   }
@@ -287,9 +328,98 @@
     const preview = panel.querySelector('[data-mjpt="preview"]');
     const provider = panel.querySelector('[data-mjpt="provider"]');
     const instruction = panel.querySelector('[data-mjpt="instruction"]');
+    const librarySearch = panel.querySelector('[data-mjpt="library-search"]');
+    const libraryResults = panel.querySelector('[data-mjpt="library-results"]');
+    const titleDialog = panel.querySelector('[data-mjpt="title-dialog"]');
+    const titleInput = panel.querySelector('[data-mjpt="prompt-title"]');
+    const exportDialog = panel.querySelector('[data-mjpt="export-dialog"]');
+    const importFile = panel.querySelector('[data-mjpt="import-file"]');
     const translatePage = panel.querySelector('[data-mjpt="translate-page"]');
     const keepOriginal = panel.querySelector('[data-mjpt="keep-original"]');
     const keepOriginalWrap = panel.querySelector('[data-mjpt="keep-original-wrap"]');
+    let selectedPromptId = '';
+    let promptRecords = [];
+
+    function hideLibraryResults() {
+      libraryResults.hidden = true;
+      librarySearch.setAttribute('aria-expanded', 'false');
+    }
+
+    function previewForRecord(record) {
+      const source = MJPromptCore.splitPromptAndParams(record.chinese).text;
+      const sourceParagraphs = MJPromptCore.splitPromptParagraphs(source);
+      const translatedParagraphs = MJPromptCore.splitPromptParagraphs(record.english);
+      if (sourceParagraphs.length && sourceParagraphs.length === translatedParagraphs.length) {
+        return MJPromptCore.buildBilingualResult(sourceParagraphs, translatedParagraphs).preview;
+      }
+      return [source, record.english].filter(Boolean).join('\n\n');
+    }
+
+    function selectPrompt(record) {
+      if (!record) return;
+      selectedPromptId = record.id;
+      input.value = record.chinese;
+      librarySearch.value = MJPanelState.formatPromptOption(record);
+      if (record.english) {
+        MJPanelState.setPreviewResult(preview, previewForRecord(record), record.english, false);
+      } else {
+        preview.value = '';
+        delete preview.dataset.english;
+        delete preview.dataset.stale;
+      }
+      hideLibraryResults();
+      setStatus(panel, `已载入：${record.title}`, 'success');
+    }
+
+    function renderLibraryResults(query = '') {
+      libraryResults.replaceChildren();
+      const matches = MJPanelState.filterPromptRecords(promptRecords, query);
+      for (const record of matches) {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'mjpt-library-option';
+        option.dataset.promptId = record.id;
+        option.setAttribute('role', 'option');
+        option.textContent = MJPanelState.formatPromptOption(record);
+        option.addEventListener('click', () => selectPrompt(record));
+        libraryResults.append(option);
+      }
+      if (!matches.length) {
+        const empty = document.createElement('span');
+        empty.className = 'mjpt-library-empty';
+        empty.textContent = '没有匹配的提示词';
+        libraryResults.append(empty);
+      }
+      libraryResults.hidden = false;
+      librarySearch.setAttribute('aria-expanded', 'true');
+    }
+
+    async function refreshLibrary(query = '') {
+      promptRecords = await promptLibrary.list();
+      renderLibraryResults(query);
+      return promptRecords;
+    }
+
+    async function downloadLibrary(format) {
+      const records = await promptLibrary.list();
+      const content = MJPromptFile.serialize(records, format);
+      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      try {
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = MJPromptFile.exportFilename(format, new Date());
+        anchor.hidden = true;
+        panel.append(anchor);
+        anchor.click();
+        anchor.remove();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+      exportDialog.hidden = true;
+      setStatus(panel, `已导出 ${records.length} 条提示词`, 'success');
+    }
+
     const pageState = pageTranslator.snapshot();
     translatePage.checked = pageState.enabled;
     keepOriginal.checked = pageState.keepOriginal;
@@ -302,6 +432,85 @@
     });
     panel.querySelector('[data-mjpt="fill"]').addEventListener('click', (event) => {
       translate(panel, 'fill', event.currentTarget);
+    });
+    librarySearch.addEventListener('focus', () => renderLibraryResults(librarySearch.value));
+    librarySearch.addEventListener('input', () => renderLibraryResults(librarySearch.value));
+    panel.querySelector('[data-mjpt="prompt-add"]').addEventListener('click', () => {
+      titleInput.value = '';
+      titleDialog.hidden = false;
+      titleInput.focus();
+    });
+    panel.querySelector('[data-mjpt="title-cancel"]').addEventListener('click', () => {
+      titleDialog.hidden = true;
+      input.focus();
+    });
+    panel.querySelector('[data-mjpt="title-confirm"]').addEventListener('click', async () => {
+      try {
+        const english = MJPanelState.isPreviewFresh(preview) ? preview.dataset.english : '';
+        const record = await promptLibrary.add({
+          title: titleInput.value,
+          chinese: input.value,
+          english,
+        });
+        titleDialog.hidden = true;
+        promptRecords = await promptLibrary.list();
+        selectPrompt(record);
+        setStatus(panel, `已新增：${record.title}`, 'success');
+      } catch (error) {
+        setStatus(panel, error?.message || '新增提示词失败', 'error');
+      }
+    });
+    panel.querySelector('[data-mjpt="prompt-update"]').addEventListener('click', async () => {
+      if (!MJPanelState.canUpdateSelectedPrompt(selectedPromptId, preview)) {
+        setStatus(panel, selectedPromptId ? '请先重新翻译后再更新' : '请先选择要更新的提示词', 'error');
+        return;
+      }
+      try {
+        const record = await promptLibrary.update(selectedPromptId, {
+          chinese: input.value,
+          english: preview.dataset.english,
+        });
+        promptRecords = await promptLibrary.list();
+        selectPrompt(record);
+        setStatus(panel, `已更新：${record.title}`, 'success');
+      } catch (error) {
+        setStatus(panel, error?.message || '更新提示词失败', 'error');
+      }
+    });
+    panel.querySelector('[data-mjpt="import"]').addEventListener('click', () => importFile.click());
+    importFile.addEventListener('change', async () => {
+      const file = importFile.files?.[0];
+      if (!file) return;
+      try {
+        const extension = file.name.toLocaleLowerCase().split('.').pop();
+        if (!['md', 'txt'].includes(extension)) throw new TypeError('仅支持 Markdown 或 TXT 文件');
+        const parsed = MJPromptFile.parse(await file.text(), extension);
+        const merged = await promptLibrary.merge(parsed.records);
+        promptRecords = await promptLibrary.list();
+        const selected = promptRecords.find((record) => record.id === selectedPromptId);
+        if (selected) selectPrompt(selected);
+        setStatus(
+          panel,
+          `导入完成：新增 ${merged.added}，覆盖 ${merged.overwritten}，跳过 ${parsed.skipped + merged.skipped}`,
+          'success',
+        );
+      } catch (error) {
+        setStatus(panel, error?.message || '导入失败，原提示词未修改', 'error');
+      } finally {
+        importFile.value = '';
+      }
+    });
+    panel.querySelector('[data-mjpt="export"]').addEventListener('click', () => {
+      exportDialog.hidden = false;
+    });
+    panel.querySelector('[data-mjpt="export-cancel"]').addEventListener('click', () => {
+      exportDialog.hidden = true;
+    });
+    panel.querySelector('[data-mjpt="export-md"]').addEventListener('click', () => {
+      downloadLibrary('md').catch((error) => setStatus(panel, error?.message || '导出失败', 'error'));
+    });
+    panel.querySelector('[data-mjpt="export-txt"]').addEventListener('click', () => {
+      downloadLibrary('txt').catch((error) => setStatus(panel, error?.message || '导出失败', 'error'));
     });
     panel.querySelector('[data-mjpt="save-config"]').addEventListener('click', async () => {
       clearTimeout(saveTimer);
@@ -320,33 +529,41 @@
     });
     panel.querySelector('[data-mjpt="clear"]').addEventListener('click', () => {
       MJDraftStore.clearPanelContent(input, preview);
+      selectedPromptId = '';
+      librarySearch.value = '';
+      hideLibraryResults();
       setStatus(panel, '已清空当前输入', 'success');
       input.focus();
     });
     panel.querySelector('[data-mjpt="settings"]').addEventListener('click', async () => {
       await chrome.runtime.sendMessage({ type: 'open-options' });
     });
-    provider.addEventListener('change', () => {
+    provider.addEventListener('change', async () => {
       MJPanelState.syncInstructionAvailability(
         provider,
         instruction,
         panel.querySelector('[data-mjpt="instruction-note"]'),
       );
       if (pageTranslator.snapshot().enabled) {
+        await pageCacheReady;
         pageTranslator.setProvider(provider.value);
-        pageTranslator.scan(document.body);
+        pageTranslator.register(document.body);
       }
     });
-    translatePage.addEventListener('change', () => {
+    translatePage.addEventListener('change', async () => {
       if (translatePage.checked) {
+        await pageCacheReady;
         keepOriginal.checked = true;
         keepOriginalWrap.hidden = false;
         pageTranslator.enable({ provider: provider.value, keepOriginal: true });
-        pageTranslator.scan(document.body);
+        pageTranslator.register(document.body);
       } else {
+        clearTimeout(pageRootTimer);
+        pageRoots.clear();
         keepOriginal.checked = true;
         keepOriginalWrap.hidden = true;
         pageTranslator.disable();
+        pageTranslator.flushCache().catch(() => {});
         setStatus(panel, '已关闭页面翻译并恢复原文', 'success');
       }
     });
@@ -367,6 +584,9 @@
         event.preventDefault();
         translate(panel, 'translate-fill', panel.querySelector('[data-mjpt="translate-fill"]'));
       }
+    });
+    refreshLibrary().then(hideLibraryResults).catch(() => {
+      setStatus(panel, '提示词库读取失败，但不影响本次使用', 'error');
     });
   }
 
@@ -411,19 +631,32 @@
     return Boolean(element?.closest?.(`#${PANEL_ID}, [data-mjpt-page-translation="true"]`));
   }
 
+  function schedulePageRoots() {
+    clearTimeout(pageRootTimer);
+    pageRootTimer = setTimeout(() => {
+      const roots = MJPanelState.coalesceRoots([...pageRoots]);
+      pageRoots.clear();
+      for (const root of roots) pageTranslator.register(root);
+    }, 100);
+  }
+
   const observer = new MutationObserver((mutations) => {
-    scheduleScan();
-    if (!pageTranslator.snapshot().enabled) return;
+    let sawExternalNode = false;
     for (const mutation of mutations) {
       for (const node of mutation.addedNodes) {
-        if (!isExtensionNode(node)) pageTranslator.scan(node);
+        if (isExtensionNode(node)) continue;
+        sawExternalNode = true;
+        if (pageTranslator.snapshot().enabled) pageRoots.add(node);
       }
     }
+    if (sawExternalNode) scheduleScan();
+    if (pageRoots.size) schedulePageRoots();
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('pointerdown', (event) => handleInteractionTarget(event.target), true);
   document.addEventListener('focusin', (event) => handleInteractionTarget(event.target), true);
   window.addEventListener('resize', positionCurrentPanel);
   window.addEventListener('scroll', positionCurrentPanel, true);
+  window.addEventListener('pagehide', () => pageTranslator.flushCache().catch(() => {}));
   scan();
 }());

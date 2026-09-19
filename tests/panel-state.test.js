@@ -5,12 +5,20 @@ let markPreviewStale;
 let setPreviewResult;
 let isPreviewFresh;
 let syncInstructionAvailability;
+let formatPromptOption;
+let filterPromptRecords;
+let canUpdateSelectedPrompt;
+let coalesceRoots;
 try {
   ({
     markPreviewStale,
     setPreviewResult,
     isPreviewFresh,
     syncInstructionAvailability,
+    formatPromptOption,
+    filterPromptRecords,
+    canUpdateSelectedPrompt,
+    coalesceRoots,
   } = require('../content/panel-state.js'));
 } catch {
   markPreviewStale = undefined;
@@ -55,4 +63,31 @@ test('free provider disables guidance while model providers enable it', () => {
   syncInstructionAvailability(select, input, note);
   assert.equal(input.disabled, false);
   assert.equal(note.hidden, true);
+});
+
+test('duplicate prompt titles are disambiguated by date and remain searchable', () => {
+  assert.equal(typeof filterPromptRecords, 'function');
+  const records = [
+    { id: 'a', title: '云宫', date: '2026-09-18T10:00:00.000Z' },
+    { id: 'b', title: '云宫', date: '2026-09-19T10:00:00.000Z' },
+    { id: 'c', title: '森林', date: '2026-09-19T10:00:00.000Z' },
+  ];
+  assert.deepEqual(filterPromptRecords(records, '云宫').map(formatPromptOption), [
+    '云宫 · 2026-09-18', '云宫 · 2026-09-19',
+  ]);
+});
+
+test('selected stale or missing preview cannot update a stored prompt', () => {
+  assert.equal(typeof canUpdateSelectedPrompt, 'function');
+  assert.equal(canUpdateSelectedPrompt('id-1', { dataset: { english: 'Old', stale: 'true' } }), false);
+  assert.equal(canUpdateSelectedPrompt('', { dataset: { english: 'Current' } }), false);
+  assert.equal(canUpdateSelectedPrompt('id-1', { dataset: { english: 'Current' } }), true);
+});
+
+test('nested mutation roots are coalesced to their highest ancestor', () => {
+  assert.equal(typeof coalesceRoots, 'function');
+  const child = {};
+  const sibling = {};
+  const parent = { contains: (node) => node === child };
+  assert.deepEqual(coalesceRoots([child, parent, sibling, child]), [parent, sibling]);
 });

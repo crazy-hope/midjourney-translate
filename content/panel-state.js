@@ -22,11 +22,38 @@
     note.hidden = !isFree;
   }
 
+  function formatPromptOption(record) {
+    const date = typeof record?.date === 'string' ? record.date.slice(0, 10) : '';
+    return date ? `${record.title} · ${date}` : String(record?.title || '');
+  }
+
+  function filterPromptRecords(records, query) {
+    const needle = String(query || '').trim().toLocaleLowerCase();
+    const values = Array.isArray(records) ? records : [];
+    if (!needle) return values.slice();
+    return values.filter((record) => String(record?.title || '').toLocaleLowerCase().includes(needle));
+  }
+
+  function canUpdateSelectedPrompt(selectedId, preview) {
+    return Boolean(String(selectedId || '').trim()) && isPreviewFresh(preview);
+  }
+
+  function coalesceRoots(roots) {
+    const unique = [...new Set(Array.isArray(roots) ? roots.filter(Boolean) : [])];
+    return unique.filter((candidate) => !unique.some((ancestor) => (
+      ancestor !== candidate && typeof ancestor.contains === 'function' && ancestor.contains(candidate)
+    )));
+  }
+
   const api = Object.freeze({
     markPreviewStale,
     setPreviewResult,
     isPreviewFresh,
     syncInstructionAvailability,
+    formatPromptOption,
+    filterPromptRecords,
+    canUpdateSelectedPrompt,
+    coalesceRoots,
   });
   globalScope.MJPanelState = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
