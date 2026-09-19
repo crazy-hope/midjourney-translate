@@ -5,10 +5,11 @@
     if (preview?.dataset?.english) preview.dataset.stale = 'true';
   }
 
-  function setPreviewResult(preview, bilingual, english) {
+  function setPreviewResult(preview, bilingual, english, stale = false) {
     preview.value = bilingual;
     preview.dataset.english = english;
-    delete preview.dataset.stale;
+    if (stale) preview.dataset.stale = 'true';
+    else delete preview.dataset.stale;
   }
 
   function isPreviewFresh(preview) {

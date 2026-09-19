@@ -34,6 +34,15 @@ test('a completed translation replaces preview and becomes fillable', () => {
   assert.equal(isPreviewFresh(preview), true);
 });
 
+test('an in-flight result stays visible but stale when the source changed', () => {
+  const preview = { value: '', dataset: {} };
+  setPreviewResult(preview, '宫殿\nPalace', 'Palace', true);
+  assert.equal(preview.value, '宫殿\nPalace');
+  assert.equal(preview.dataset.english, 'Palace');
+  assert.equal(preview.dataset.stale, 'true');
+  assert.equal(isPreviewFresh(preview), false);
+});
+
 test('free provider disables guidance while model providers enable it', () => {
   assert.equal(typeof syncInstructionAvailability, 'function');
   const select = { value: 'free' };

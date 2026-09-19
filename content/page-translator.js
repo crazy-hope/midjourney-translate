@@ -25,6 +25,16 @@
     return false;
   }
 
+  function isVisibleElement(element, getComputedStyle = null) {
+    if (!element) return false;
+    for (let current = element; current; current = current.parentElement) {
+      if (current.hidden || current.getAttribute?.('aria-hidden') === 'true') return false;
+      const style = getComputedStyle?.(current);
+      if (style && (style.display === 'none' || style.visibility === 'hidden')) return false;
+    }
+    return true;
+  }
+
   function restoreOwnedRecord(record) {
     const { node, originalText, translationNode } = record || {};
     if (!node?.isConnected || ![originalText, ''].includes(node.nodeValue)) return false;
@@ -54,12 +64,41 @@
     let provider = 'deepseek';
     let generation = 0;
     let errorGeneration = -1;
+    let haltedGeneration = -1;
+    let activeRequests = 0;
     const cache = new Map();
     const records = new Set();
     const pendingByKey = new Map();
+    const permitWaiters = [];
 
-    function keyFor(text) {
-      return `${provider}\u0000${text}`;
+    function keyFor(providerName, text) {
+      return `${providerName}\u0000${text}`;
+    }
+
+    function acquirePermit() {
+      if (activeRequests < workerCount) {
+        activeRequests += 1;
+        return Promise.resolve();
+      }
+      return new Promise((resolve) => permitWaiters.push(resolve));
+    }
+
+    function releasePermit() {
+      const next = permitWaiters.shift();
+      if (next) next();
+      else activeRequests -= 1;
+    }
+
+    async function requestWithPermit(payload, scanGeneration) {
+      await acquirePermit();
+      try {
+        if (!enabled || scanGeneration !== generation || haltedGeneration === generation) {
+          return { cancelled: true };
+        }
+        return { response: await request(payload) };
+      } finally {
+        releasePermit();
+      }
     }
 
     function restoreAll() {
@@ -70,11 +109,12 @@
     async function scan(root) {
       if (!enabled) return;
       const scanGeneration = generation;
+      const scanProvider = provider;
       const groups = new Map();
       for (const item of adapter.collect(root) || []) {
         if (!isTranslationCandidate(item.text)) continue;
         records.add(item);
-        const key = keyFor(item.text);
+        const key = keyFor(scanProvider, item.text);
         if (!groups.has(key)) groups.set(key, { key, text: item.text, records: [] });
         groups.get(key).records.push(item);
       }
@@ -85,26 +125,29 @@
       let cursor = 0;
 
       async function runJob(job) {
-        if (!enabled || scanGeneration !== generation) return;
+        if (!enabled || scanGeneration !== generation || haltedGeneration === generation) return;
         let chinese = cache.get(job.key);
         if (!chinese) {
           let pending = pendingByKey.get(job.key);
           if (!pending) {
-            pending = Promise.resolve(request({
+            pending = requestWithPermit({
               text: job.text,
-              provider,
+              provider: scanProvider,
               purpose: 'page',
-            }));
+            }, scanGeneration);
             pendingByKey.set(job.key, pending);
           }
           try {
-            const response = await pending;
+            const outcome = await pending;
+            if (outcome?.cancelled) return;
+            const response = outcome?.response;
             chinese = response?.text;
             if (typeof chinese !== 'string' || !chinese.trim()) {
               throw new Error('页面翻译返回了空结果');
             }
             cache.set(job.key, chinese);
           } catch (error) {
+            if (enabled && scanGeneration === generation) haltedGeneration = generation;
             if (enabled && scanGeneration === generation && errorGeneration !== generation) {
               errorGeneration = generation;
               onError(error);
@@ -121,7 +164,7 @@
       }
 
       async function worker() {
-        while (cursor < jobs.length) {
+        while (cursor < jobs.length && haltedGeneration !== scanGeneration) {
           const job = jobs[cursor];
           cursor += 1;
           await runJob(job);
@@ -139,6 +182,7 @@
       provider = next.provider || provider;
       keepOriginal = next.keepOriginal !== false;
       errorGeneration = -1;
+      haltedGeneration = -1;
     }
 
     function disable() {
@@ -160,6 +204,7 @@
       pendingByKey.clear();
       restoreAll();
       errorGeneration = -1;
+      haltedGeneration = -1;
     }
 
     function snapshot() {
@@ -179,9 +224,9 @@
     const nodeFilter = documentObject.defaultView?.NodeFilter || globalScope.NodeFilter;
 
     function visible(element) {
-      if (!element || element.hidden || element.getAttribute?.('aria-hidden') === 'true') return false;
-      const style = documentObject.defaultView?.getComputedStyle?.(element);
-      return !style || (style.display !== 'none' && style.visibility !== 'hidden');
+      return isVisibleElement(element, documentObject.defaultView?.getComputedStyle?.bind(
+        documentObject.defaultView,
+      ));
     }
 
     function recordFor(node) {
@@ -265,6 +310,7 @@
   const api = Object.freeze({
     isTranslationCandidate,
     shouldSkipElement,
+    isVisibleElement,
     restoreOwnedRecord,
     createController,
     createBrowserAdapter,

@@ -49,7 +49,11 @@
       const response = await chrome.runtime.sendMessage({
         type: 'translate', text, provider, purpose: 'page',
       });
-      if (!response?.ok) throw new Error(response?.message || '页面翻译失败');
+      if (!response?.ok) {
+        const error = new Error(response?.message || '页面翻译失败');
+        error.code = response?.code;
+        throw error;
+      }
       return { text: response.text, provider: response.provider };
     },
     onProgress: ({ completed, pending }) => {
@@ -208,7 +212,8 @@
   async function translate(panel, mode = 'translate-fill', button = null) {
     const input = panel.querySelector('[data-mjpt="prompt"]');
     const preview = panel.querySelector('[data-mjpt="preview"]');
-    const { text, params } = MJPromptCore.splitPromptAndParams(input.value);
+    const sourcePrompt = input.value;
+    const { text, params } = MJPromptCore.splitPromptAndParams(sourcePrompt);
     let english = preview.dataset.english || '';
     if (mode !== 'fill' && !text) {
       setStatus(panel, '请先输入需要翻译的中文提示词', 'error');
@@ -258,7 +263,12 @@
         }
         const result = MJPromptCore.buildBilingualResult(paragraphs, translations);
         english = result.english;
-        MJPanelState.setPreviewResult(preview, result.preview, english);
+        const sourceChanged = input.value !== sourcePrompt;
+        MJPanelState.setPreviewResult(preview, result.preview, english, sourceChanged);
+        if (sourceChanged) {
+          setStatus(panel, '翻译期间中文内容已修改，结果已保留，请重新翻译后再填入', 'error');
+          return;
+        }
         if (mode === 'translate-only') {
           setStatus(panel, `${PROVIDER_LABELS[actualProvider]} 翻译完成，可检查结果后点击填入`, 'success');
           return;

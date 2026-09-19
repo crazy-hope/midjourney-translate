@@ -3,12 +3,14 @@ const assert = require('node:assert/strict');
 
 let isTranslationCandidate;
 let shouldSkipElement;
+let isVisibleElement;
 let restoreOwnedRecord;
 let createController;
 try {
   ({
     isTranslationCandidate,
     shouldSkipElement,
+    isVisibleElement,
     restoreOwnedRecord,
     createController,
   } = require('../content/page-translator.js'));
@@ -48,6 +50,26 @@ test('skips protected elements and descendants of editable or translator content
   ];
   assert.ok(fixtures.every((item) => shouldSkipElement(item)));
   assert.equal(shouldSkipElement(element('SPAN')), false);
+});
+
+test('treats descendants of hidden containers as invisible', () => {
+  assert.equal(typeof isVisibleElement, 'function');
+  assert.equal(isVisibleElement(null), false);
+  const hiddenParent = {
+    hidden: false,
+    parentElement: null,
+    getAttribute: () => null,
+  };
+  const child = {
+    hidden: false,
+    parentElement: hiddenParent,
+    getAttribute: () => null,
+  };
+  const getStyle = (element) => ({
+    display: element === hiddenParent ? 'none' : 'block',
+    visibility: 'visible',
+  });
+  assert.equal(isVisibleElement(child, getStyle), false);
 });
 
 function record(id, text) {
@@ -174,4 +196,48 @@ test('queue never exceeds two concurrent requests', async () => {
   controller.enable({ provider: 'free', keepOriginal: true });
   await controller.scan({});
   assert.equal(maxActive, 2);
+});
+
+test('concurrent scans share one global concurrency limit', async () => {
+  const roots = [
+    { records: [record(1, 'Create')] },
+    { records: [record(2, 'Explore')] },
+    { records: [record(3, 'Imagine')] },
+  ];
+  const adapter = adapterFor([]);
+  adapter.collect = (root) => root.records;
+  let active = 0;
+  let maxActive = 0;
+  const controller = createController({
+    adapter,
+    concurrency: 2,
+    request: async ({ text, provider }) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((resolve) => setImmediate(resolve));
+      active -= 1;
+      return { text: `中:${text}`, provider };
+    },
+  });
+  controller.enable({ provider: 'free', keepOriginal: true });
+  await Promise.all(roots.map((root) => controller.scan(root)));
+  assert.equal(maxActive, 2);
+});
+
+test('first request failure stops later queued jobs in the same generation', async () => {
+  const adapter = adapterFor([
+    record(1, 'Create'), record(2, 'Explore'), record(3, 'Imagine'),
+  ]);
+  let requests = 0;
+  const controller = createController({
+    adapter,
+    concurrency: 1,
+    request: async () => {
+      requests += 1;
+      throw new Error('provider unavailable');
+    },
+  });
+  controller.enable({ provider: 'free', keepOriginal: true });
+  await controller.scan({});
+  assert.equal(requests, 1);
 });
