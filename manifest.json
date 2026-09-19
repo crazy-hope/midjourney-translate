@@ -28,6 +28,7 @@
         "content/prompt-library.js",
         "content/prompt-file.js",
         "content/panel-state.js",
+        "content/page-translation-cache.js",
         "content/page-translator.js",
         "content/content.js"
       ],
