@@ -25,6 +25,7 @@
         "shared/prompt-core.js",
         "content/dom-adapter.js",
         "content/draft-store.js",
+        "content/panel-state.js",
         "content/content.js"
       ],
       "css": ["content/styles.css"],

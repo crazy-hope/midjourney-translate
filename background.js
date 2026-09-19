@@ -45,7 +45,12 @@ async function openMidjourney() {
 
 async function getUiSettings() {
   const settings = await readSettings();
-  return { ok: true, provider: settings.provider, params: settings.params };
+  return {
+    ok: true,
+    provider: settings.provider,
+    translationInstruction: settings.translationInstruction,
+    params: settings.params,
+  };
 }
 
 async function saveParams(params) {
@@ -55,9 +60,11 @@ async function saveParams(params) {
   return { ok: true, params: normalized.params };
 }
 
-async function saveUiSettings(provider, params) {
+async function saveUiSettings(provider, translationInstruction, params) {
   const settings = await readSettings();
-  const normalized = MJConfig.normalizeConfig({ ...settings, provider, params });
+  const normalized = MJConfig.normalizeConfig({
+    ...settings, provider, translationInstruction, params,
+  });
   await chrome.storage.local.set({ [SETTINGS_KEY]: normalized });
   return { ok: true, provider: normalized.provider, params: normalized.params };
 }
@@ -87,7 +94,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   else if (message.type === 'get-ui-settings') operation = getUiSettings();
   else if (message.type === 'save-params') operation = saveParams(message.params);
   else if (message.type === 'save-ui-settings') {
-    operation = saveUiSettings(message.provider, message.params);
+    operation = saveUiSettings(message.provider, message.translationInstruction, message.params);
   }
   else if (message.type === 'open-options') {
     operation = chrome.runtime.openOptionsPage().then(() => ({ ok: true }));

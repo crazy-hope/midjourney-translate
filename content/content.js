@@ -2,6 +2,7 @@
   'use strict';
 
   const PANEL_ID = 'mjpt-panel';
+  const PROVIDER_LABELS = { free: '免费翻译', qwen: '千问', deepseek: 'DeepSeek' };
   const FALLBACK_PARAMS = { aspectRatio: '16:9', stylize: 450, chaos: 8, quality: '', hd: false };
   const draftStore = MJDraftStore.createDraftStore(chrome.storage.local);
   let currentPanel = null;
@@ -110,6 +111,11 @@
           <textarea class="mjpt-preview" data-mjpt="preview" rows="7" placeholder="翻译完成后将在这里显示中英文对照" readonly></textarea>
         </label>
       </div>
+      <label class="mjpt-instruction-row">
+        <span>翻译要求（仅千问 / DeepSeek 有效）</span>
+        <input data-mjpt="instruction" type="text" maxlength="500">
+      </label>
+      <p class="mjpt-instruction-note" data-mjpt="instruction-note" hidden>免费翻译无法遵循自定义要求</p>
       <div class="mjpt-controls">
         <label><span>画幅 --ar</span><input data-mjpt="aspect" value="16:9" inputmode="text" list="mjpt-aspect-ratios"></label>
         <datalist id="mjpt-aspect-ratios">
@@ -147,10 +153,26 @@
       const response = await chrome.runtime.sendMessage({ type: 'get-ui-settings' });
       if (!response?.ok) throw new Error(response?.message);
       applyParams(panel, response.params);
-      panel.querySelector('[data-mjpt="provider"]').value = response.provider || 'deepseek';
+      const provider = panel.querySelector('[data-mjpt="provider"]');
+      const instruction = panel.querySelector('[data-mjpt="instruction"]');
+      provider.value = response.provider || 'deepseek';
+      instruction.value = response.translationInstruction || '';
+      MJPanelState.syncInstructionAvailability(
+        provider,
+        instruction,
+        panel.querySelector('[data-mjpt="instruction-note"]'),
+      );
     } catch {
       applyParams(panel, FALLBACK_PARAMS);
-      panel.querySelector('[data-mjpt="provider"]').value = 'deepseek';
+      const provider = panel.querySelector('[data-mjpt="provider"]');
+      const instruction = panel.querySelector('[data-mjpt="instruction"]');
+      provider.value = 'deepseek';
+      instruction.value = '';
+      MJPanelState.syncInstructionAvailability(
+        provider,
+        instruction,
+        panel.querySelector('[data-mjpt="instruction-note"]'),
+      );
       setStatus(panel, '请刷新页面或检查扩展状态', 'error');
     }
   }
@@ -170,8 +192,14 @@
       input.focus();
       return;
     }
+    if (mode === 'fill' && !MJPanelState.isPreviewFresh(preview)) {
+      setStatus(panel, '中文内容已修改，请重新翻译后再填入', 'error');
+      input.focus();
+      return;
+    }
 
     const buttonLabel = button?.textContent || '';
+    let actualProvider = panel.querySelector('[data-mjpt="provider"]').value;
     if (button && mode !== 'fill') {
       button.disabled = true;
       button.textContent = '翻译中…';
@@ -180,16 +208,20 @@
       if (mode !== 'fill') {
         preview.value = '';
         delete preview.dataset.english;
+        delete preview.dataset.stale;
         const paragraphs = MJPromptCore.splitPromptParagraphs(text);
         const translations = [];
         for (let index = 0; index < paragraphs.length; index += 1) {
-          setStatus(panel, `正在翻译第 ${index + 1}/${paragraphs.length} 段…`);
+          setStatus(panel, `正在使用 ${PROVIDER_LABELS[actualProvider]} 翻译第 ${index + 1}/${paragraphs.length} 段…`);
           const response = await chrome.runtime.sendMessage({
             type: 'translate',
             text: paragraphs[index],
             provider: panel.querySelector('[data-mjpt="provider"]').value,
+            instruction: panel.querySelector('[data-mjpt="instruction"]').value,
+            purpose: 'prompt',
           });
           if (!response?.ok) throw new Error(response?.message || '翻译失败');
+          actualProvider = response.provider || actualProvider;
           translations.push(response.text);
           preview.value = MJPromptCore.buildBilingualResult(
             paragraphs.slice(0, translations.length),
@@ -198,9 +230,9 @@
         }
         const result = MJPromptCore.buildBilingualResult(paragraphs, translations);
         english = result.english;
-        preview.dataset.english = english;
+        MJPanelState.setPreviewResult(preview, result.preview, english);
         if (mode === 'translate-only') {
-          setStatus(panel, '翻译完成，可检查结果后点击填入', 'success');
+          setStatus(panel, `${PROVIDER_LABELS[actualProvider]} 翻译完成，可检查结果后点击填入`, 'success');
           return;
         }
       }
@@ -208,7 +240,7 @@
       const destination = MJDom.findComposer(document);
       if (!destination) throw new Error('未找到 Midjourney 提示词输入框，请刷新页面');
       MJDom.setComposerValue(destination, finalPrompt);
-      setStatus(panel, '已填入 Midjourney，请确认后手动提交', 'success');
+      setStatus(panel, `${PROVIDER_LABELS[actualProvider]} 翻译并已填入 Midjourney，请确认后手动提交`, 'success');
     } catch (error) {
       setStatus(panel, error?.message || '翻译失败，请重试', 'error');
     } finally {
@@ -222,6 +254,8 @@
   function bindPanel(panel) {
     const input = panel.querySelector('[data-mjpt="prompt"]');
     const preview = panel.querySelector('[data-mjpt="preview"]');
+    const provider = panel.querySelector('[data-mjpt="provider"]');
+    const instruction = panel.querySelector('[data-mjpt="instruction"]');
     panel.querySelector('[data-mjpt="translate-fill"]').addEventListener('click', (event) => {
       translate(panel, 'translate-fill', event.currentTarget);
     });
@@ -239,7 +273,8 @@
           draftStore,
           chrome.runtime,
           input.value,
-          panel.querySelector('[data-mjpt="provider"]').value,
+          provider.value,
+          instruction.value,
           paramsFromPanel(panel),
         );
         setStatus(panel, '提示词和参数已保存到本地', 'success');
@@ -257,12 +292,21 @@
     panel.querySelector('[data-mjpt="settings"]').addEventListener('click', async () => {
       await chrome.runtime.sendMessage({ type: 'open-options' });
     });
+    provider.addEventListener('change', () => {
+      MJPanelState.syncInstructionAvailability(
+        provider,
+        instruction,
+        panel.querySelector('[data-mjpt="instruction-note"]'),
+      );
+    });
     for (const control of panel.querySelectorAll('.mjpt-controls input, .mjpt-controls select')) {
       control.addEventListener('change', () => scheduleParamSave(panel));
     }
     input.addEventListener('input', () => {
-      preview.value = '';
-      delete preview.dataset.english;
+      MJPanelState.markPreviewStale(preview);
+      if (preview.dataset.stale === 'true') {
+        setStatus(panel, '中文内容已修改，右侧为上次翻译');
+      }
       clearTimeout(draftSaveTimer);
       draftSaveTimer = setTimeout(async () => {
         try {

@@ -34,7 +34,7 @@ test('temporarily clearing the panel preserves the saved draft for reload', asyn
   assert.equal(await nextPage.load(), '云海中的宫殿');
 });
 
-test('manual save persists the Chinese prompt, selected provider, and every current parameter', async () => {
+test('manual save persists the prompt, provider, guidance, and every current parameter', async () => {
   assert.equal(typeof savePanelState, 'function');
   const saved = [];
   const draftStore = { async save(prompt) { saved.push({ prompt }); } };
@@ -46,10 +46,15 @@ test('manual save persists the Chinese prompt, selected provider, and every curr
   };
   const params = { aspectRatio: '3:2', stylize: 600, chaos: 12, quality: '2', hd: true };
 
-  await savePanelState(draftStore, runtime, '云海中的宫殿', 'qwen', params);
+  await savePanelState(draftStore, runtime, '云海中的宫殿', 'qwen', '强调电影镜头', params);
 
   assert.deepEqual(saved, [
     { prompt: '云海中的宫殿' },
-    { type: 'save-ui-settings', provider: 'qwen', params },
+    {
+      type: 'save-ui-settings',
+      provider: 'qwen',
+      translationInstruction: '强调电影镜头',
+      params,
+    },
   ]);
 });

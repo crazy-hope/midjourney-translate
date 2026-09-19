@@ -23,16 +23,19 @@
     input.value = '';
     preview.value = '';
     delete preview.dataset.english;
+    delete preview.dataset.stale;
   }
 
-  async function savePanelState(draftStore, runtime, prompt, provider, params) {
+  async function savePanelState(draftStore, runtime, prompt, provider, translationInstruction, params) {
     if (!draftStore || typeof draftStore.save !== 'function'
       || !runtime || typeof runtime.sendMessage !== 'function') {
       throw new TypeError('Draft store and Chrome runtime are required');
     }
     const [, response] = await Promise.all([
       draftStore.save(prompt),
-      runtime.sendMessage({ type: 'save-ui-settings', provider, params }),
+      runtime.sendMessage({
+        type: 'save-ui-settings', provider, translationInstruction, params,
+      }),
     ]);
     if (!response?.ok) throw new Error(response?.message || '参数保存失败');
   }
