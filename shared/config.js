@@ -3,6 +3,8 @@
 
   const PROVIDERS = Object.freeze(['free', 'qwen', 'deepseek']);
   const QUALITY_VALUES = Object.freeze(['', '1', '2', '4']);
+  const MAX_TRANSLATION_INSTRUCTION_LENGTH = 500;
+  const DEFAULT_TRANSLATION_INSTRUCTION = '按照 Midjourney 易理解的视觉提示词风格翻译，准确保留主体、构图、镜头、光线、材质、色彩和氛围；先分析语义，再只输出自然、简洁的英文提示词。';
   const PRESETS = Object.freeze({
     qwen: Object.freeze({
       endpoint: 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
@@ -18,6 +20,7 @@
 
   const DEFAULTS = Object.freeze({
     provider: 'deepseek',
+    translationInstruction: DEFAULT_TRANSLATION_INSTRUCTION,
     providers: PRESETS,
     params: Object.freeze({
       aspectRatio: '16:9',
@@ -50,6 +53,9 @@
   function normalizeConfig(value) {
     const source = value && typeof value === 'object' ? value : {};
     const provider = PROVIDERS.includes(source.provider) ? source.provider : DEFAULTS.provider;
+    const translationInstruction = typeof source.translationInstruction === 'string'
+      ? source.translationInstruction.trim().slice(0, MAX_TRANSLATION_INSTRUCTION_LENGTH)
+      : DEFAULT_TRANSLATION_INSTRUCTION;
     const sourceParams = source.params && typeof source.params === 'object' ? source.params : {};
     const aspectRatio = typeof sourceParams.aspectRatio === 'string'
       && /^[1-9]\d*:[1-9]\d*$/.test(sourceParams.aspectRatio.trim())
@@ -59,6 +65,7 @@
 
     return {
       provider,
+      translationInstruction,
       providers: {
         qwen: normalizeProviderConfig(source.providers?.qwen, PRESETS.qwen),
         deepseek: normalizeProviderConfig(source.providers?.deepseek, PRESETS.deepseek),
@@ -105,6 +112,8 @@
 
   const api = Object.freeze({
     DEFAULTS,
+    DEFAULT_TRANSLATION_INSTRUCTION,
+    MAX_TRANSLATION_INSTRUCTION_LENGTH,
     QUALITY_VALUES,
     normalizeConfig,
     providerPreset,

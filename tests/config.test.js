@@ -18,6 +18,23 @@ test('defaults select DeepSeek translation and omit quality/HD', () => {
   assert.equal(DEFAULTS.params.hd, false);
 });
 
+test('default config includes a Midjourney translation instruction', () => {
+  assert.match(DEFAULTS.translationInstruction, /Midjourney/);
+  assert.match(DEFAULTS.translationInstruction, /只输出/);
+});
+
+test('translation instruction preserves empty mode and caps oversized values', () => {
+  assert.equal(normalizeConfig({ translationInstruction: '' }).translationInstruction, '');
+  assert.equal(
+    normalizeConfig({ translationInstruction: 'x'.repeat(700) }).translationInstruction.length,
+    500,
+  );
+  assert.equal(
+    normalizeConfig({ translationInstruction: 42 }).translationInstruction,
+    DEFAULTS.translationInstruction,
+  );
+});
+
 test('normalization accepts only known provider and parameter values', () => {
   const value = normalizeConfig({
     provider: 'bad',
