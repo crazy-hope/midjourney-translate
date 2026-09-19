@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "MJ 中文提示词翻译",
+  "version": "0.1.0",
+  "description": "将中文提示词翻译为英文并填入 Midjourney。",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "https://www.midjourney.com/*",
+    "https://midjourney.com/*",
+    "https://api.mymemory.translated.net/*"
+  ],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "MJ 中文提示词翻译",
+    "default_popup": "popup/popup.html"
+  },
+  "options_page": "options/options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://*.midjourney.com/*"],
+      "js": [
+        "shared/prompt-core.js",
+        "content/dom-adapter.js",
+        "content/draft-store.js",
+        "content/content.js"
+      ],
+      "css": ["content/styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

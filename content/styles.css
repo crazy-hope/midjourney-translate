@@ -1,0 +1,81 @@
+#mjpt-panel {
+  --mjpt-accent: #6c5ce7;
+  --mjpt-border: rgba(127, 127, 142, .32);
+  --mjpt-bg: rgba(255, 255, 255, .96);
+  --mjpt-fg: #1b1d23;
+  --mjpt-muted: #6c707b;
+  box-sizing: border-box;
+  width: auto;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--mjpt-border);
+  border-radius: 14px;
+  background: var(--mjpt-bg);
+  color: var(--mjpt-fg);
+  box-shadow: 0 10px 30px rgba(22, 24, 31, .1);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  position: fixed;
+  z-index: 1000;
+}
+
+#mjpt-panel[hidden] { display: none !important; }
+
+#mjpt-panel, #mjpt-panel * { box-sizing: border-box; }
+#mjpt-panel .mjpt-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+#mjpt-panel .mjpt-heading > div { display: flex; align-items: baseline; gap: 9px; }
+#mjpt-panel .mjpt-kicker { color: var(--mjpt-accent); font-size: 10px; font-weight: 900; letter-spacing: .12em; }
+#mjpt-panel .mjpt-provider-wrap { display: block; }
+#mjpt-panel .mjpt-provider { min-width: 112px; height: 30px; padding: 0 28px 0 10px; border-radius: 999px; background: rgba(108, 92, 231, .12); color: var(--mjpt-accent); font-size: 12px; font-weight: 800; cursor: pointer; }
+#mjpt-panel .mjpt-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+#mjpt-panel textarea,
+#mjpt-panel input,
+#mjpt-panel select,
+#mjpt-panel button {
+  border: 1px solid var(--mjpt-border);
+  border-radius: 9px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+}
+
+#mjpt-panel textarea:focus,
+#mjpt-panel input:focus,
+#mjpt-panel select:focus,
+#mjpt-panel button:focus-visible { outline: 3px solid rgba(108, 92, 231, .27); outline-offset: 1px; }
+#mjpt-panel .mjpt-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+#mjpt-panel .mjpt-editor { display: grid; gap: 6px; color: var(--mjpt-muted); font-size: 12px; font-weight: 800; }
+#mjpt-panel .mjpt-prompt,
+#mjpt-panel .mjpt-preview { width: 100%; min-height: 180px; padding: 11px 12px; resize: vertical; line-height: 1.55; font-weight: 400; }
+#mjpt-panel .mjpt-preview { background: rgba(127, 127, 142, .06); }
+#mjpt-panel .mjpt-controls { display: grid; grid-template-columns: 1.15fr repeat(3, minmax(90px, .8fr)) auto; gap: 9px; margin-top: 10px; align-items: end; }
+#mjpt-panel .mjpt-controls label { display: grid; gap: 5px; color: var(--mjpt-muted); font-size: 11px; font-weight: 700; }
+#mjpt-panel .mjpt-controls input,
+#mjpt-panel .mjpt-controls select { width: 100%; height: 36px; padding: 0 9px; }
+#mjpt-panel .mjpt-controls .mjpt-check { display: flex; flex-direction: row; align-items: center; height: 36px; padding: 0 8px; white-space: nowrap; }
+#mjpt-panel .mjpt-check input { width: 16px; height: 16px; padding: 0; accent-color: var(--mjpt-accent); }
+#mjpt-panel .mjpt-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
+#mjpt-panel button { height: 38px; padding: 0 15px; cursor: pointer; font-weight: 800; }
+#mjpt-panel .mjpt-translate { border-color: var(--mjpt-accent); background: var(--mjpt-accent); color: #fff; }
+#mjpt-panel .mjpt-secondary { color: var(--mjpt-accent); }
+#mjpt-panel .mjpt-clear,
+#mjpt-panel .mjpt-settings { color: var(--mjpt-muted); }
+#mjpt-panel button:disabled { cursor: wait; opacity: .65; }
+#mjpt-panel .mjpt-status { min-height: 18px; margin: 8px 2px 0; color: var(--mjpt-muted); font-size: 12px; line-height: 1.4; }
+#mjpt-panel .mjpt-status[data-kind="success"] { color: #087443; }
+#mjpt-panel .mjpt-status[data-kind="error"] { color: #b42318; }
+
+@media (max-width: 760px) {
+  #mjpt-panel .mjpt-editor-grid { grid-template-columns: 1fr; }
+  #mjpt-panel .mjpt-controls { grid-template-columns: repeat(2, minmax(110px, 1fr)); }
+}
+
+@media (prefers-color-scheme: dark) {
+  #mjpt-panel {
+    --mjpt-bg: rgba(27, 29, 35, .97);
+    --mjpt-fg: #f4f5f7;
+    --mjpt-muted: #b5b8c1;
+    --mjpt-border: rgba(224, 225, 232, .2);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, .3);
+  }
+}

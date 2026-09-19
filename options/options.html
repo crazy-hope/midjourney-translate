@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MJ 翻译设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="page-shell">
+    <header>
+      <span class="eyebrow">MJ PROMPT TRANSLATOR</span>
+      <h1>翻译设置</h1>
+      <p>选择免费翻译，或使用你自己的千问 / DeepSeek 密钥。</p>
+    </header>
+
+    <section class="card" aria-labelledby="provider-heading">
+      <h2 id="provider-heading">翻译通道</h2>
+      <label for="provider">服务</label>
+      <select id="provider">
+        <option value="free">免费翻译（MyMemory）</option>
+        <option value="qwen">千问</option>
+        <option value="deepseek">DeepSeek</option>
+      </select>
+
+      <div id="free-note" class="note">
+        无需密钥。文本会发送到 MyMemory 公共翻译服务，长文会自动分段。
+      </div>
+
+      <div id="model-fields" class="model-fields" hidden>
+        <label for="endpoint">API 地址</label>
+        <input id="endpoint" type="url" spellcheck="false" autocomplete="url">
+
+        <label for="api-key">API Key</label>
+        <div class="secret-row">
+          <input id="api-key" type="password" spellcheck="false" autocomplete="off">
+          <button id="toggle-key" class="secondary compact" type="button" aria-pressed="false">显示</button>
+        </div>
+
+        <label for="model">模型名称</label>
+        <input id="model" type="text" spellcheck="false" autocomplete="off">
+      </div>
+    </section>
+
+    <aside class="security-note">
+      <strong>本地存储说明</strong>
+      <p>API Key 只保存在 <code>chrome.storage.local</code>，不会进入 Midjourney 页面。但它不是系统级密钥保险箱，请勿在不可信的 Chrome 配置中使用。</p>
+    </aside>
+
+    <div class="actions">
+      <button id="save" type="button">保存设置</button>
+      <button id="test" class="secondary" type="button">测试连接</button>
+    </div>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+  </main>
+
+  <script src="../shared/config.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

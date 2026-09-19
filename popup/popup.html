@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MJ 提示词翻译</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <span class="mark">MJ</span>
+      <div>
+        <h1>提示词翻译</h1>
+        <p>当前：<strong id="provider">读取中…</strong></p>
+      </div>
+    </header>
+    <button id="open-mj" class="primary" type="button">
+      <span>打开 / 定位 Midjourney</span>
+      <span aria-hidden="true">→</span>
+    </button>
+    <button id="open-settings" class="secondary" type="button">翻译设置</button>
+    <p id="status" role="status" aria-live="polite"></p>
+  </main>
+  <script src="../shared/config.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
