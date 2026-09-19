@@ -25,6 +25,7 @@
         "shared/prompt-core.js",
         "content/dom-adapter.js",
         "content/draft-store.js",
+        "content/prompt-library.js",
         "content/panel-state.js",
         "content/page-translator.js",
         "content/content.js"
