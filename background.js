@@ -1,4 +1,9 @@
-importScripts('shared/config.js', 'shared/prompt-core.js', 'shared/translator-core.js');
+importScripts(
+  'shared/config.js',
+  'shared/prompt-core.js',
+  'shared/translator-core.js',
+  'shared/translation-service.js',
+);
 
 const SETTINGS_KEY = 'settings';
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -8,33 +13,20 @@ async function readSettings() {
   return MJConfig.normalizeConfig(stored[SETTINGS_KEY]);
 }
 
-async function runTranslation(text, settings) {
+async function runTranslation(message, settings) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    if (settings.provider === 'free') {
-      return await MJTranslatorCore.translateFree(text, fetch, { signal: controller.signal });
-    }
-    return await MJTranslatorCore.translateOpenAI(
-      text,
-      settings.providers[settings.provider],
-      fetch,
-      { signal: controller.signal },
-    );
+    return await MJTranslationService.run(message, settings, fetch, { signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
 }
 
 async function translateMessage(message) {
-  let settings = message.config
-    ? MJConfig.normalizeConfig(message.config)
-    : await readSettings();
-  if (!message.config && message.provider) {
-    settings = MJConfig.normalizeConfig({ ...settings, provider: message.provider });
-  }
-  const text = await runTranslation(message.text, settings);
-  return { ok: true, text };
+  const settings = await readSettings();
+  const result = await runTranslation(message, settings);
+  return { ok: true, text: result.text, provider: result.provider };
 }
 
 async function openMidjourney() {

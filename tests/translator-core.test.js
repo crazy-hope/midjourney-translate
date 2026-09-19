@@ -31,6 +31,15 @@ test('free provider encodes Chinese input and joins chunk responses', async () =
   assert.ok(calls.every((url) => Buffer.byteLength(url.searchParams.get('q'), 'utf8') <= 500));
 });
 
+test('free page translation requests English to Simplified Chinese', async () => {
+  let calledUrl;
+  await translateFree('Create', async (url) => {
+    calledUrl = new URL(url);
+    return jsonResponse(200, { responseData: { translatedText: '创建' } });
+  }, { direction: 'page' });
+  assert.equal(calledUrl.searchParams.get('langpair'), 'en|zh-CN');
+});
+
 test('OpenAI provider sends only the configured endpoint and bearer key', async () => {
   let observed;
   const fetchImpl = async (url, init) => {
@@ -51,6 +60,33 @@ test('OpenAI provider sends only the configured endpoint and bearer key', async 
   const body = JSON.parse(observed.init.body);
   assert.equal(body.model, 'model-a');
   assert.equal(body.messages.at(-1).content, '云海');
+});
+
+test('OpenAI prompt translation includes custom guidance but returns only content', async () => {
+  let body;
+  const result = await translateOpenAI('云海宫殿', {
+    endpoint: 'https://api.example.com/chat/completions', apiKey: 'k', model: 'm',
+  }, async (_url, init) => {
+    body = JSON.parse(init.body);
+    return jsonResponse(200, { choices: [{ message: { content: 'cinematic cloud palace' } }] });
+  }, { purpose: 'prompt', instruction: '强调电影镜头' });
+
+  assert.match(body.messages[0].content, /强调电影镜头/);
+  assert.match(body.messages[0].content, /only the final English prompt/i);
+  assert.equal(result, 'cinematic cloud palace');
+});
+
+test('OpenAI page translation ignores prompt guidance and requests Chinese', async () => {
+  let body;
+  await translateOpenAI('Create', {
+    endpoint: 'https://api.example.com/chat/completions', apiKey: 'k', model: 'm',
+  }, async (_url, init) => {
+    body = JSON.parse(init.body);
+    return jsonResponse(200, { choices: [{ message: { content: '创建' } }] });
+  }, { purpose: 'page', instruction: 'must-not-appear' });
+
+  assert.match(body.messages[0].content, /Simplified Chinese/i);
+  assert.doesNotMatch(body.messages[0].content, /must-not-appear/);
 });
 
 test('OpenAI response removes code fences and wrapping quotes', async () => {
