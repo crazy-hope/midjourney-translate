@@ -359,7 +359,7 @@
       if (!record) return;
       selectedPromptId = record.id;
       input.value = record.chinese;
-      librarySearch.value = MJPanelState.formatPromptOption(record);
+      librarySearch.value = MJPanelState.promptSearchValue(record);
       if (record.english) {
         MJPanelState.setPreviewResult(preview, previewForRecord(record), record.english, false);
       } else {
@@ -584,6 +584,9 @@
         event.preventDefault();
         translate(panel, 'translate-fill', panel.querySelector('[data-mjpt="translate-fill"]'));
       }
+    });
+    panel.addEventListener('keydown', (event) => {
+      if (MJPanelState.shouldPreventPanelSubmit(event)) event.preventDefault();
     });
     refreshLibrary().then(hideLibraryResults).catch(() => {
       setStatus(panel, '提示词库读取失败，但不影响本次使用', 'error');

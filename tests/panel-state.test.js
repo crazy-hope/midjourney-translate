@@ -9,6 +9,8 @@ let formatPromptOption;
 let filterPromptRecords;
 let canUpdateSelectedPrompt;
 let coalesceRoots;
+let promptSearchValue;
+let shouldPreventPanelSubmit;
 try {
   ({
     markPreviewStale,
@@ -19,6 +21,8 @@ try {
     filterPromptRecords,
     canUpdateSelectedPrompt,
     coalesceRoots,
+    promptSearchValue,
+    shouldPreventPanelSubmit,
   } = require('../content/panel-state.js'));
 } catch {
   markPreviewStale = undefined;
@@ -73,7 +77,7 @@ test('duplicate prompt titles are disambiguated by date and remain searchable', 
     { id: 'c', title: '森林', date: '2026-09-19T10:00:00.000Z' },
   ];
   assert.deepEqual(filterPromptRecords(records, '云宫').map(formatPromptOption), [
-    '云宫 · 2026-09-18', '云宫 · 2026-09-19',
+    '云宫 · 2026-09-18 10:00', '云宫 · 2026-09-19 10:00',
   ]);
 });
 
@@ -90,4 +94,18 @@ test('nested mutation roots are coalesced to their highest ancestor', () => {
   const sibling = {};
   const parent = { contains: (node) => node === child };
   assert.deepEqual(coalesceRoots([child, parent, sibling, child]), [parent, sibling]);
+});
+
+test('same-day duplicate titles have distinct labels but retain a searchable title value', () => {
+  const first = { id: 'a', title: '云宫', date: '2026-09-19T10:01:00.000Z' };
+  const second = { id: 'b', title: '云宫', date: '2026-09-19T10:02:00.000Z' };
+  assert.notEqual(formatPromptOption(first), formatPromptOption(second));
+  assert.equal(promptSearchValue(first), '云宫');
+});
+
+test('Enter in a panel input is prevented from submitting the Midjourney form', () => {
+  assert.equal(typeof shouldPreventPanelSubmit, 'function');
+  assert.equal(shouldPreventPanelSubmit({ key: 'Enter', target: { tagName: 'INPUT' } }), true);
+  assert.equal(shouldPreventPanelSubmit({ key: 'Enter', target: { tagName: 'TEXTAREA' } }), false);
+  assert.equal(shouldPreventPanelSubmit({ key: ' ', target: { tagName: 'INPUT' } }), false);
 });

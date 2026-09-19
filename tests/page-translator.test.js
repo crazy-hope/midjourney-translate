@@ -51,7 +51,8 @@ function emptyCache(seed = []) {
       values.set(`${provider}\0${normalized}`, translated);
       this.puts.push({ provider, source: normalized, translated });
     },
-    async flush() {},
+    flushes: 0,
+    async flush() { this.flushes += 1; },
   };
 }
 
@@ -168,6 +169,42 @@ test('cache hits avoid requests and provider changes use separate entries', asyn
   await controller.register({});
   await adapter.show(1);
   assert.equal(request.calls.length, 1);
+});
+
+test('switching away and back never reuses a cancelled provider request', async () => {
+  const adapter = visibilityAdapter([record(1, 'Create')]);
+  const pending = [];
+  const request = (payload) => new Promise((resolve) => pending.push({ payload, resolve }));
+  const controller = createController({ adapter, cache: emptyCache(), request });
+  controller.enable({ provider: 'deepseek', keepOriginal: true });
+  await controller.register({});
+  const oldShowing = adapter.show(1);
+  assert.equal(pending.length, 1);
+
+  controller.setProvider('qwen');
+  controller.setProvider('deepseek');
+  await controller.register({});
+  const newShowing = adapter.show(1);
+  assert.equal(pending.length, 2);
+
+  pending[0].resolve({ text: '旧结果', provider: 'deepseek' });
+  pending[1].resolve({ text: '新结果', provider: 'deepseek' });
+  await Promise.all([oldShowing, newShowing]);
+  assert.deepEqual(
+    adapter.events.filter((event) => event.type === 'render').map((event) => event.chinese),
+    ['新结果'],
+  );
+});
+
+test('flushes a dirty persistent cache when the request queue becomes idle', async () => {
+  const cache = emptyCache();
+  const adapter = visibilityAdapter([record(1, 'Create')]);
+  const controller = createController({ adapter, cache, request: countedRequest() });
+  controller.enable({ provider: 'deepseek', keepOriginal: true });
+  await controller.register({});
+  await adapter.show(1);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(cache.flushes, 1);
 });
 
 test('global request concurrency never exceeds two', async () => {

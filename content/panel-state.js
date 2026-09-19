@@ -23,8 +23,14 @@
   }
 
   function formatPromptOption(record) {
-    const date = typeof record?.date === 'string' ? record.date.slice(0, 10) : '';
+    const date = typeof record?.date === 'string'
+      ? record.date.slice(0, 16).replace('T', ' ')
+      : '';
     return date ? `${record.title} · ${date}` : String(record?.title || '');
+  }
+
+  function promptSearchValue(record) {
+    return String(record?.title || '');
   }
 
   function filterPromptRecords(records, query) {
@@ -45,15 +51,21 @@
     )));
   }
 
+  function shouldPreventPanelSubmit(event) {
+    return event?.key === 'Enter' && String(event?.target?.tagName || '').toUpperCase() === 'INPUT';
+  }
+
   const api = Object.freeze({
     markPreviewStale,
     setPreviewResult,
     isPreviewFresh,
     syncInstructionAvailability,
     formatPromptOption,
+    promptSearchValue,
     filterPromptRecords,
     canUpdateSelectedPrompt,
     coalesceRoots,
+    shouldPreventPanelSubmit,
   });
   globalScope.MJPanelState = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

@@ -91,6 +91,7 @@
     let haltedGeneration = -1;
     let errorGeneration = -1;
     let completed = 0;
+    let cacheDirty = false;
     const records = new Set();
     const jobsByKey = new Map();
     const queuedJobs = [];
@@ -109,14 +110,20 @@
       if (jobsByKey.get(job.key) === job) jobsByKey.delete(job.key);
       job.done.resolve();
       reportProgress();
+      if (cacheDirty && jobsByKey.size === 0 && inflightJobs.size === 0
+        && typeof cache.flush === 'function') {
+        cacheDirty = false;
+        Promise.resolve(cache.flush()).catch(() => { cacheDirty = true; });
+      }
     }
 
     function cancelWaitingJobs() {
-      for (const job of queuedJobs.splice(0)) finishJob(job);
-      for (const job of jobsByKey.values()) {
-        if (!inflightJobs.has(job)) finishJob(job);
-      }
+      const jobs = [...jobsByKey.values()];
+      queuedJobs.length = 0;
+      jobsByKey.clear();
+      for (const job of jobs) job.done.resolve();
       overflowRecords.clear();
+      reportProgress();
     }
 
     function restoreAll() {
@@ -149,6 +156,7 @@
           throw new Error('页面翻译返回了空结果');
         }
         cache.put(job.provider, job.text, chinese);
+        cacheDirty = true;
         if (enabled && job.generation === generation && haltedGeneration !== generation) {
           for (const item of job.records) {
             adapter.render(item, chinese, keepOriginal);
@@ -295,7 +303,8 @@
     }
 
     function flushCache() {
-      return typeof cache.flush === 'function' ? cache.flush() : Promise.resolve();
+      if (typeof cache.flush !== 'function') return Promise.resolve();
+      return Promise.resolve(cache.flush()).then(() => { cacheDirty = false; });
     }
 
     return Object.freeze({
