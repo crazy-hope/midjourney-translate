@@ -37,10 +37,28 @@
   }
 
   function setStatus(panel, message, kind = '') {
+    if (!panel) return;
     const status = panel.querySelector('[data-mjpt="status"]');
     status.textContent = message;
     status.dataset.kind = kind;
   }
+
+  const pageTranslator = MJPageTranslator.createController({
+    adapter: MJPageTranslator.createBrowserAdapter(document, PANEL_ID),
+    request: async ({ text, provider }) => {
+      const response = await chrome.runtime.sendMessage({
+        type: 'translate', text, provider, purpose: 'page',
+      });
+      if (!response?.ok) throw new Error(response?.message || '页面翻译失败');
+      return { text: response.text, provider: response.provider };
+    },
+    onProgress: ({ completed, pending }) => {
+      setStatus(currentPanel, `页面翻译：已完成 ${completed}，待处理 ${pending}`);
+    },
+    onError: (error) => {
+      setStatus(currentPanel, error?.message || '页面翻译失败', 'error');
+    },
+  });
 
   function numberInRange(value, fallback, minimum, maximum) {
     const number = Number(value);
@@ -129,6 +147,16 @@
           </select>
         </label>
         <label class="mjpt-check"><input data-mjpt="hd" type="checkbox"><span>HD高清</span></label>
+      </div>
+      <div class="mjpt-page-options">
+        <label class="mjpt-switch-row">
+          <input data-mjpt="translate-page" type="checkbox" role="switch">
+          <span>翻译页面</span>
+        </label>
+        <label class="mjpt-switch-row" data-mjpt="keep-original-wrap" hidden>
+          <input data-mjpt="keep-original" type="checkbox" role="switch" checked>
+          <span>保留原文</span>
+        </label>
       </div>
       <div class="mjpt-actions">
         <button class="mjpt-translate" data-mjpt="translate-fill" type="button">翻译并填入</button>
@@ -256,6 +284,13 @@
     const preview = panel.querySelector('[data-mjpt="preview"]');
     const provider = panel.querySelector('[data-mjpt="provider"]');
     const instruction = panel.querySelector('[data-mjpt="instruction"]');
+    const translatePage = panel.querySelector('[data-mjpt="translate-page"]');
+    const keepOriginal = panel.querySelector('[data-mjpt="keep-original"]');
+    const keepOriginalWrap = panel.querySelector('[data-mjpt="keep-original-wrap"]');
+    const pageState = pageTranslator.snapshot();
+    translatePage.checked = pageState.enabled;
+    keepOriginal.checked = pageState.keepOriginal;
+    keepOriginalWrap.hidden = !pageState.enabled;
     panel.querySelector('[data-mjpt="translate-fill"]').addEventListener('click', (event) => {
       translate(panel, 'translate-fill', event.currentTarget);
     });
@@ -298,6 +333,26 @@
         instruction,
         panel.querySelector('[data-mjpt="instruction-note"]'),
       );
+      if (pageTranslator.snapshot().enabled) {
+        pageTranslator.setProvider(provider.value);
+        pageTranslator.scan(document.body);
+      }
+    });
+    translatePage.addEventListener('change', () => {
+      if (translatePage.checked) {
+        keepOriginal.checked = true;
+        keepOriginalWrap.hidden = false;
+        pageTranslator.enable({ provider: provider.value, keepOriginal: true });
+        pageTranslator.scan(document.body);
+      } else {
+        keepOriginal.checked = true;
+        keepOriginalWrap.hidden = true;
+        pageTranslator.disable();
+        setStatus(panel, '已关闭页面翻译并恢复原文', 'success');
+      }
+    });
+    keepOriginal.addEventListener('change', () => {
+      pageTranslator.setKeepOriginal(keepOriginal.checked);
     });
     for (const control of panel.querySelectorAll('.mjpt-controls input, .mjpt-controls select')) {
       control.addEventListener('change', () => scheduleParamSave(panel));
@@ -360,7 +415,20 @@
     scanTimer = setTimeout(scan, 120);
   }
 
-  const observer = new MutationObserver(scheduleScan);
+  function isExtensionNode(node) {
+    const element = node?.nodeType === 1 ? node : node?.parentElement;
+    return Boolean(element?.closest?.(`#${PANEL_ID}, [data-mjpt-page-translation="true"]`));
+  }
+
+  const observer = new MutationObserver((mutations) => {
+    scheduleScan();
+    if (!pageTranslator.snapshot().enabled) return;
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (!isExtensionNode(node)) pageTranslator.scan(node);
+      }
+    }
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('pointerdown', (event) => handleInteractionTarget(event.target), true);
   document.addEventListener('focusin', (event) => handleInteractionTarget(event.target), true);

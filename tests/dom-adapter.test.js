@@ -92,6 +92,18 @@ test('MJ composer and translator controls share one interaction scope', () => {
   assert.equal(isWithinInteractionScope(composer, panel, panelControl), true);
 });
 
+test('page translation switches stay inside the translator interaction scope', () => {
+  const translatePageSwitch = { name: 'translate-page' };
+  const keepOriginalSwitch = { name: 'keep-original' };
+  const composer = { contains: () => false };
+  const panel = {
+    contains: (target) => [translatePageSwitch, keepOriginalSwitch].includes(target),
+  };
+
+  assert.equal(isWithinInteractionScope(composer, panel, translatePageSwitch), true);
+  assert.equal(isWithinInteractionScope(composer, panel, keepOriginalSwitch), true);
+});
+
 test('elements outside the MJ interaction scope allow the panel to hide', () => {
   const composer = { contains: () => false };
   const panel = { contains: () => false };
