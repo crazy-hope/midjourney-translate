@@ -23,6 +23,7 @@
       "matches": ["https://*.midjourney.com/*"],
       "js": [
         "shared/prompt-core.js",
+        "content/extension-context.js",
         "content/dom-adapter.js",
         "content/draft-store.js",
         "content/prompt-library.js",

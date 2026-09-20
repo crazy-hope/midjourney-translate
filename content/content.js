@@ -14,6 +14,12 @@
   let saveTimer = null;
   let pageRootTimer = null;
   const pageRoots = new Set();
+  const extensionRuntime = MJExtensionContext.createGuard(chrome.runtime, () => {
+    clearTimeout(saveTimer);
+    clearTimeout(pageRootTimer);
+    pageRoots.clear();
+    setStatus(currentPanel, '扩展已更新，请刷新 Midjourney 页面', 'error');
+  });
 
   function positionCurrentPanel() {
     if (!currentPanel || !currentHost || currentPanel.hidden) return;
@@ -50,7 +56,7 @@
     adapter: MJPageTranslator.createBrowserAdapter(document, PANEL_ID),
     cache: pageTranslationCache,
     request: async ({ text, provider }) => {
-      const response = await chrome.runtime.sendMessage({
+      const response = await extensionRuntime.sendMessage({
         type: 'translate', text, provider, purpose: 'page',
       });
       if (!response?.ok) {
@@ -99,7 +105,7 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       try {
-        const response = await chrome.runtime.sendMessage({ type: 'save-params', params: paramsFromPanel(panel) });
+        const response = await extensionRuntime.sendMessage({ type: 'save-params', params: paramsFromPanel(panel) });
         if (!response?.ok) throw new Error(response?.message);
       } catch {
         setStatus(panel, '参数未能保存，但本次仍可使用', 'error');
@@ -216,7 +222,7 @@
 
   async function loadUiSettings(panel) {
     try {
-      const response = await chrome.runtime.sendMessage({ type: 'get-ui-settings' });
+      const response = await extensionRuntime.sendMessage({ type: 'get-ui-settings' });
       if (!response?.ok) throw new Error(response?.message);
       applyParams(panel, response.params);
       const provider = panel.querySelector('[data-mjpt="provider"]');
@@ -280,7 +286,7 @@
         const translations = [];
         for (let index = 0; index < paragraphs.length; index += 1) {
           setStatus(panel, `正在使用 ${PROVIDER_LABELS[actualProvider]} 翻译第 ${index + 1}/${paragraphs.length} 段…`);
-          const response = await chrome.runtime.sendMessage({
+          const response = await extensionRuntime.sendMessage({
             type: 'translate',
             text: paragraphs[index],
             provider: panel.querySelector('[data-mjpt="provider"]').value,
@@ -516,7 +522,7 @@
       clearTimeout(saveTimer);
       try {
         await MJDraftStore.savePanelConfig(
-          chrome.runtime,
+          extensionRuntime,
           provider.value,
           instruction.value,
           paramsFromPanel(panel),
@@ -536,7 +542,8 @@
       input.focus();
     });
     panel.querySelector('[data-mjpt="settings"]').addEventListener('click', async () => {
-      await chrome.runtime.sendMessage({ type: 'open-options' });
+      const response = await extensionRuntime.sendMessage({ type: 'open-options' });
+      if (!response?.ok) setStatus(panel, response?.message || '设置页打开失败', 'error');
     });
     provider.addEventListener('change', async () => {
       MJPanelState.syncInstructionAvailability(
