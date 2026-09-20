@@ -11,6 +11,7 @@ let canUpdateSelectedPrompt;
 let coalesceRoots;
 let promptSearchValue;
 let shouldPreventPanelSubmit;
+let shouldStopPanelKeydown;
 try {
   ({
     markPreviewStale,
@@ -23,6 +24,7 @@ try {
     coalesceRoots,
     promptSearchValue,
     shouldPreventPanelSubmit,
+    shouldStopPanelKeydown,
   } = require('../content/panel-state.js'));
 } catch {
   markPreviewStale = undefined;
@@ -108,4 +110,12 @@ test('Enter in a panel input is prevented from submitting the Midjourney form', 
   assert.equal(shouldPreventPanelSubmit({ key: 'Enter', target: { tagName: 'INPUT' } }), true);
   assert.equal(shouldPreventPanelSubmit({ key: 'Enter', target: { tagName: 'TEXTAREA' } }), false);
   assert.equal(shouldPreventPanelSubmit({ key: ' ', target: { tagName: 'INPUT' } }), false);
+});
+
+test('Enter in a panel textarea stays inside the panel without blocking its newline', () => {
+  const textareaEnter = { key: 'Enter', target: { tagName: 'TEXTAREA' } };
+  assert.equal(typeof shouldStopPanelKeydown, 'function');
+  assert.equal(shouldStopPanelKeydown(textareaEnter), true);
+  assert.equal(shouldPreventPanelSubmit(textareaEnter), false);
+  assert.equal(shouldStopPanelKeydown({ key: 'a', target: { tagName: 'TEXTAREA' } }), false);
 });

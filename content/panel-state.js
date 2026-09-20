@@ -55,6 +55,10 @@
     return event?.key === 'Enter' && String(event?.target?.tagName || '').toUpperCase() === 'INPUT';
   }
 
+  function shouldStopPanelKeydown(event) {
+    return event?.key === 'Enter';
+  }
+
   const api = Object.freeze({
     markPreviewStale,
     setPreviewResult,
@@ -66,6 +70,7 @@
     canUpdateSelectedPrompt,
     coalesceRoots,
     shouldPreventPanelSubmit,
+    shouldStopPanelKeydown,
   });
   globalScope.MJPanelState = api;
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

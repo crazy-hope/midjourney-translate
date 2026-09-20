@@ -593,6 +593,7 @@
       }
     });
     panel.addEventListener('keydown', (event) => {
+      if (MJPanelState.shouldStopPanelKeydown(event)) event.stopPropagation();
       if (MJPanelState.shouldPreventPanelSubmit(event)) event.preventDefault();
     });
     refreshLibrary().then(hideLibraryResults).catch(() => {
